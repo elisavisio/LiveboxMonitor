@@ -21,7 +21,8 @@ void main() {
       final body = await utf8.decoder.bind(req).join();
       lastAuthHeader = req.headers.value('authorization');
       lastContextHeader = req.headers.value('x-context');
-      if (req.cookies.any((c) => c.name == 'sah_sess' && c.value == 'cookie123')) {
+      final rawCookieHeader = req.headers.value(HttpHeaders.cookieHeader) ?? '';
+      if (rawCookieHeader.contains('890c73a1/sessid=cookie123')) {
         cookieReceived = true;
       }
 
@@ -45,7 +46,11 @@ void main() {
         if (service == 'sah.Device.Information' && method == 'createContext') {
           final params = decoded['parameters'] as Map<String, dynamic>;
           if (params['password'] == 'secret') {
-            req.response.cookies.add(Cookie('sah_sess', 'cookie123'));
+            // Real Orange Livebox cookie names contain '/' (e.g. 890c73a1/sessid)
+            req.response.headers.add(
+              HttpHeaders.setCookieHeader,
+              '890c73a1/sessid=cookie123; path=/; HttpOnly',
+            );
             req.response.write(jsonEncode({
               'status': 0,
               'data': {'contextID': 'ctx_abc123'},

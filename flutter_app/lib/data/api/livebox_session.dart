@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
 class LiveboxApiException implements Exception {
   final String message;
   LiveboxApiException(this.message);
@@ -12,6 +14,11 @@ class LiveboxApiException implements Exception {
 
 /// Pure Dart implementation of the Orange Livebox sysbus HTTP JSON-RPC session
 /// (ported from LmSession.py).
+///
+/// Uses raw `Set-Cookie` / `Cookie` headers instead of `dart:io`'s `Cookie`
+/// parser because Orange Livebox session cookies contain `/` in the cookie name
+/// (e.g. `890c73a1/sessid=...`), which causes `Cookie.fromSetCookieValue` to
+/// throw a `FormatException`.
 class LiveboxSession {
   static const String appName = 'so_sdkut';
   static const Duration defaultTimeout = Duration(seconds: 6);
@@ -20,16 +27,30 @@ class LiveboxSession {
   final String sessionName;
 
   HttpClient? _client;
-  final List<Cookie> _cookies = [];
+  // Raw cookie map: preserves Livebox cookie names containing '/' (e.g. '890c73a1/sessid')
+  final Map<String, String> _rawCookies = {};
   String? _contextId;
   int _channelId = 0;
   String _user = '';
   String _password = '';
 
+  final List<String> _debugLogs = [];
+  String? _lastErrorDetail;
+
   LiveboxSession(String url, {this.sessionName = 'LiveboxMonitor'})
       : baseUrl = '${url.trim().replaceAll(RegExp(r'/+$'), '')}/';
 
   bool get isAuthenticated => _contextId != null && _client != null;
+  List<String> get debugLogs => List.unmodifiable(_debugLogs);
+  String? get lastErrorDetail => _lastErrorDetail;
+
+  void _log(String message) {
+    final ts = DateTime.now().toIso8601String().substring(11, 23);
+    final line = '[$ts] $message';
+    _debugLogs.add(line);
+    if (_debugLogs.length > 200) _debugLogs.removeAt(0);
+    debugPrint('[LiveboxSession] $line');
+  }
 
   HttpClient _createClient() {
     final c = HttpClient();
@@ -57,11 +78,16 @@ class LiveboxSession {
   /// Returns `1` on success, `0` on bad credentials, `-1` on connectivity error.
   Future<int> signIn(String user, String password) async {
     await close();
+    _debugLogs.clear();
+    _lastErrorDetail = null;
     _user = user;
     _password = password;
     _client = _createClient();
-    _cookies.clear();
+    _rawCookies.clear();
     _channelId = 0;
+
+    final wsUrl = '${baseUrl}ws';
+    _log('Starting signIn -> POST $wsUrl (user="$user", password=***)');
 
     final authBody = jsonEncode({
       'service': 'sah.Device.Information',
@@ -75,7 +101,7 @@ class LiveboxSession {
 
     try {
       final resp = await _postRaw(
-        '${baseUrl}ws',
+        wsUrl,
         body: authBody,
         headers: const {
           'Accept': '*/*',
@@ -83,39 +109,79 @@ class LiveboxSession {
           'Content-Type': 'application/x-sah-ws-4-call+json',
         },
         timeout: defaultTimeout,
+        logStep: 'createContext',
       );
 
+      final snippet = resp.length > 260 ? '${resp.substring(0, 260)}...' : resp;
+      _log('createContext body: $snippet');
+
       final decoded = jsonDecode(resp);
-      if (decoded is! Map<String, dynamic>) return 0;
-      final data = decoded['data'];
-      if (data is! Map<String, dynamic> || data['contextID'] == null) {
+      if (decoded is! Map<String, dynamic>) {
+        _lastErrorDetail = 'Unexpected non-object JSON from createContext: $snippet';
+        _log(_lastErrorDetail!);
         return 0;
       }
+
+      // Livebox returns {"status":0,"data":{"contextID":"..."}} (or under result)
+      final data = decoded['data'] ??
+          (decoded['result'] is Map ? (decoded['result'] as Map)['data'] : null);
+      if (data is! Map<String, dynamic> || data['contextID'] == null) {
+        _lastErrorDetail = 'No contextID in createContext reply (bad credentials?): $snippet';
+        _log(_lastErrorDetail!);
+        return 0;
+      }
+
       _contextId = data['contextID'].toString();
+      _log('Authenticated contextID received (${_contextId!.length} chars). Cookies: ${_rawCookies.keys.join(", ")}');
 
       // Verify session via Time:getTime
       final checkResp = await _postRaw(
-        '${baseUrl}ws',
+        wsUrl,
         body: '{"service":"Time","method":"getTime","parameters":{}}',
         headers: _serviceHeaders,
         timeout: defaultTimeout,
+        logStep: 'Time:getTime',
       );
+      final checkSnippet = checkResp.length > 200 ? '${checkResp.substring(0, 200)}...' : checkResp;
+      _log('Time:getTime body: $checkSnippet');
+
       final checkJson = jsonDecode(checkResp);
-      if (checkJson is Map && checkJson['status'] == true) {
+      final ok = checkJson is Map &&
+          (checkJson['status'] == true ||
+              (checkJson['result'] is Map &&
+                  (checkJson['result'] as Map)['status'] == true));
+      if (ok) {
+        _log('Session verified successfully!');
         return 1;
       }
+
+      _lastErrorDetail = 'Time:getTime check did not return status=true: $checkSnippet';
+      _log(_lastErrorDetail!);
       await close();
       return 0;
-    } on SocketException {
+    } on SocketException catch (e) {
+      _lastErrorDetail = 'SocketException: ${e.message} (OS error: ${e.osError})';
+      _log(_lastErrorDetail!);
       await close();
       return -1;
-    } on TimeoutException {
+    } on TimeoutException catch (e) {
+      _lastErrorDetail = 'TimeoutException after ${defaultTimeout.inSeconds}s: $e';
+      _log(_lastErrorDetail!);
       await close();
       return -1;
-    } on HttpException {
+    } on HttpException catch (e) {
+      _lastErrorDetail = 'HttpException: ${e.message}';
+      _log(_lastErrorDetail!);
       await close();
       return -1;
-    } catch (_) {
+    } on FormatException catch (e) {
+      _lastErrorDetail = 'FormatException while parsing Livebox response: $e';
+      _log(_lastErrorDetail!);
+      await close();
+      return -1;
+    } catch (e, st) {
+      _lastErrorDetail = '${e.runtimeType}: $e';
+      _log('Unexpected signIn error: $e\n$st');
       await close();
       return -1;
     }
@@ -140,7 +206,7 @@ class LiveboxSession {
     _client?.close(force: true);
     _client = null;
     _contextId = null;
-    _cookies.clear();
+    _rawCookies.clear();
     _channelId = 0;
   }
 
@@ -296,17 +362,24 @@ class LiveboxSession {
     required String body,
     required Map<String, String> headers,
     required Duration timeout,
+    String? logStep,
   }) async {
     final client = _client ?? _createClient();
-    final req = await client.postUrl(Uri.parse(url)).timeout(timeout);
+    final uri = Uri.parse(url);
+    final req = await client.postUrl(uri).timeout(timeout);
     headers.forEach((k, v) => req.headers.set(k, v));
     _attachCookies(req);
     final bytes = utf8.encode(body);
     req.headers.contentLength = bytes.length;
     req.add(bytes);
     final resp = await req.close().timeout(timeout);
-    _storeCookies(resp.cookies);
-    final respBytes = await resp.fold<List<int>>([], (acc, chunk) => acc..addAll(chunk)).timeout(timeout);
+    _storeRawCookies(resp.headers[HttpHeaders.setCookieHeader], logStep: logStep);
+    if (logStep != null) {
+      _log('$logStep HTTP ${resp.statusCode} ${resp.reasonPhrase} (cookies=${_rawCookies.length})');
+    }
+    final respBytes = await resp
+        .fold<List<int>>([], (acc, chunk) => acc..addAll(chunk))
+        .timeout(timeout);
     return utf8.decode(respBytes, allowMalformed: true);
   }
 
@@ -320,21 +393,35 @@ class LiveboxSession {
     headers.forEach((k, v) => req.headers.set(k, v));
     _attachCookies(req);
     final resp = await req.close().timeout(timeout);
-    _storeCookies(resp.cookies);
-    final respBytes = await resp.fold<List<int>>([], (acc, chunk) => acc..addAll(chunk)).timeout(timeout);
+    _storeRawCookies(resp.headers[HttpHeaders.setCookieHeader]);
+    final respBytes = await resp
+        .fold<List<int>>([], (acc, chunk) => acc..addAll(chunk))
+        .timeout(timeout);
     return utf8.decode(respBytes, allowMalformed: true);
   }
 
   void _attachCookies(HttpClientRequest req) {
-    if (_cookies.isNotEmpty) {
-      req.cookies.addAll(_cookies);
+    if (_rawCookies.isNotEmpty) {
+      final headerVal =
+          _rawCookies.entries.map((e) => '${e.key}=${e.value}').join('; ');
+      req.headers.set(HttpHeaders.cookieHeader, headerVal);
     }
   }
 
-  void _storeCookies(List<Cookie> incoming) {
-    for (final c in incoming) {
-      _cookies.removeWhere((existing) => existing.name == c.name);
-      _cookies.add(c);
+  void _storeRawCookies(List<String>? setCookieHeaders, {String? logStep}) {
+    if (setCookieHeaders == null || setCookieHeaders.isEmpty) return;
+    for (final header in setCookieHeaders) {
+      final firstPart = header.split(';').first.trim();
+      final eqIdx = firstPart.indexOf('=');
+      if (eqIdx <= 0) continue;
+      final name = firstPart.substring(0, eqIdx).trim();
+      final value = firstPart.substring(eqIdx + 1).trim();
+      if (name.isNotEmpty) {
+        _rawCookies[name] = value;
+        if (logStep != null) {
+          _log('$logStep stored cookie "$name" (${value.length} chars)');
+        }
+      }
     }
   }
 }

@@ -34,6 +34,7 @@ class AppController extends ChangeNotifier {
   bool _isConnecting = false;
   bool _isRefreshing = false;
   String? _connectionError;
+  List<String> _connectionDebugLogs = const [];
   Timer? _pollingTimer;
   bool _pollingPaused = false;
 
@@ -76,6 +77,7 @@ class AppController extends ChangeNotifier {
   bool get isConnecting => _isConnecting;
   bool get isRefreshing => _isRefreshing;
   String? get connectionError => _connectionError;
+  List<String> get connectionDebugLogs => List.unmodifiable(_connectionDebugLogs);
   bool get pollingPaused => _pollingPaused;
 
   LiveboxInfo? get info => _info;
@@ -183,21 +185,25 @@ class AppController extends ChangeNotifier {
   }) async {
     _isConnecting = true;
     _connectionError = null;
+    _connectionDebugLogs = const [];
     notifyListeners();
 
     final session = LiveboxSession(url);
     final code = await session.signIn(username, password);
+    _connectionDebugLogs = List.of(session.debugLogs);
     if (code != 1) {
       _isConnecting = false;
-      _connectionError = code == 0
+      final baseMsg = code == 0
           ? strings.t(
               'Authentication failed. Please check your username and Livebox password.',
               'Échec d\'authentification. Vérifiez l\'identifiant et le mot de passe Livebox.',
             )
           : strings.t(
-              'Unable to reach Livebox at $url. Verify the URL or try Demo Mode.',
-              'Impossible de joindre la Livebox sur $url. Vérifiez l\'URL ou lancez le Mode Démo.',
+              'Unable to reach Livebox at $url. Verify the URL (or try http://192.168.1.1/) or check macOS Local Network permission.',
+              'Impossible de joindre la Livebox sur $url. Vérifiez l\'URL (ou essayez http://192.168.1.1/) ou l\'autorisation Réseau local macOS.',
             );
+      final detail = session.lastErrorDetail;
+      _connectionError = detail != null ? '$baseMsg\n$detail' : baseMsg;
       notifyListeners();
       return false;
     }

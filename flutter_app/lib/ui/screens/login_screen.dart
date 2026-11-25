@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/theme/app_theme.dart';
@@ -466,16 +467,82 @@ class _LoginScreenState extends State<LoginScreen> {
                                           ),
                                         ),
                                         child: Row(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
                                           children: [
-                                            const Icon(Icons.error_outline_rounded,
-                                                color: AppColors.danger, size: 18),
+                                            const Padding(
+                                              padding: EdgeInsets.only(top: 1),
+                                              child: Icon(Icons.error_outline_rounded,
+                                                  color: AppColors.danger, size: 18),
+                                            ),
                                             const SizedBox(width: 10),
                                             Expanded(
-                                              child: Text(
+                                              child: SelectableText(
                                                 c.connectionError!,
                                                 style: const TextStyle(
-                                                  fontSize: 12.5,
+                                                  fontSize: 12,
                                                   color: AppColors.danger,
+                                                  height: 1.4,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                    if (c.connectionDebugLogs.isNotEmpty) ...[
+                                      const SizedBox(height: 10),
+                                      Container(
+                                        decoration: BoxDecoration(
+                                          color: context.subtleSurface,
+                                          borderRadius: BorderRadius.circular(10),
+                                          border: Border.all(color: context.borderColor),
+                                        ),
+                                        child: ExpansionTile(
+                                          dense: true,
+                                          initiallyExpanded: true,
+                                          tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+                                          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                                          leading: const Icon(Icons.bug_report_outlined,
+                                              size: 16, color: AppColors.orange),
+                                          title: Text(
+                                            s.t(
+                                              'Connection Debug Log (${c.connectionDebugLogs.length})',
+                                              'Journal de débogage (${c.connectionDebugLogs.length})',
+                                            ),
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                          trailing: IconButton(
+                                            tooltip: s.t('Copy debug log', 'Copier le journal'),
+                                            icon: const Icon(Icons.copy_rounded, size: 15),
+                                            onPressed: () {
+                                              Clipboard.setData(ClipboardData(
+                                                text: c.connectionDebugLogs.join('\n'),
+                                              ));
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(s.t('Debug log copied', 'Journal copié')),
+                                                  duration: const Duration(seconds: 1),
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                          children: [
+                                            ConstrainedBox(
+                                              constraints: const BoxConstraints(maxHeight: 150),
+                                              child: SingleChildScrollView(
+                                                child: Align(
+                                                  alignment: Alignment.centerLeft,
+                                                  child: SelectableText(
+                                                    c.connectionDebugLogs.join('\n'),
+                                                    style: AppTheme.monoStyle.copyWith(
+                                                      fontSize: 11,
+                                                      color: context.textSecondary,
+                                                      height: 1.4,
+                                                    ),
+                                                  ),
                                                 ),
                                               ),
                                             ),
