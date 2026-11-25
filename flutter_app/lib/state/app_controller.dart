@@ -209,9 +209,14 @@ class AppController extends ChangeNotifier {
     }
 
     _repo = RealLiveboxRepository(session, label: '$profileName · $url');
-    await _bootstrapAfterConnect();
-    _isConnecting = false;
-    notifyListeners();
+    try {
+      await _bootstrapAfterConnect();
+    } catch (e) {
+      debugPrint('[AppController] bootstrap warning: $e');
+    } finally {
+      _isConnecting = false;
+      notifyListeners();
+    }
     return true;
   }
 
@@ -253,6 +258,8 @@ class AppController extends ChangeNotifier {
     _startPolling();
   }
 
+  bool _pollTickRunning = false;
+
   void _startPolling() {
     _pollingTimer?.cancel();
     _pollingPaused = false;
@@ -268,7 +275,8 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _pollTick() async {
-    if (_repo == null || _pollingPaused) return;
+    if (_repo == null || _pollingPaused || _pollTickRunning) return;
+    _pollTickRunning = true;
     try {
       final keys = _interfaces.map((e) => e.key).toList();
       if (keys.isNotEmpty) {
@@ -291,7 +299,11 @@ class AppController extends ChangeNotifier {
         _interfaces = await _repo!.fetchInterfaces();
       }
       notifyListeners();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[AppController] pollTick warning: $e');
+    } finally {
+      _pollTickRunning = false;
+    }
   }
 
   Future<void> disconnect() async {
@@ -307,6 +319,15 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<T?> _safeLoad<T>(String name, Future<T> Function() loader) async {
+    try {
+      return await loader();
+    } catch (e) {
+      debugPrint('[AppController] $name skipped: $e');
+      return null;
+    }
+  }
+
   Future<void> refreshAll() async {
     final repo = _repo;
     if (repo == null) return;
@@ -314,43 +335,61 @@ class AppController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final results = await Future.wait([
-        repo.fetchLiveboxInfo(),
-        repo.fetchInterfaces(),
-        repo.fetchDevices(),
-        repo.fetchDhcpConfig(),
-        repo.fetchDhcpBindings(),
-        repo.fetchNatPatRules(),
-        repo.fetchPtfRules(),
-        repo.fetchDmz(),
-        repo.fetchFirewall(),
-        repo.fetchCallLog(),
-        repo.fetchContacts(),
-        repo.fetchRepeaters(),
-        repo.fetchTvDecoders(),
-        repo.fetchWifiBands(),
-        repo.fetchRebootHistory(),
-        repo.fetchDynDnsHosts(),
-        repo.fetchStaticRoutes(),
-      ]);
+      // Phase 1: Core telemetry (sequential so embedded Livebox lighttpd isn't flooded)
+      final info = await _safeLoad('fetchLiveboxInfo', repo.fetchLiveboxInfo);
+      if (info != null) _info = info;
 
-      _info = results[0] as LiveboxInfo;
-      _interfaces = results[1] as List<NetworkInterfaceInfo>;
-      _devices = results[2] as List<NetworkDevice>;
-      _dhcpConfig = results[3] as DhcpConfig;
-      _dhcpBindings = results[4] as List<DhcpBinding>;
-      _natPatRules = results[5] as List<NatPatRule>;
-      _ptfRules = results[6] as List<PtfRule>;
-      _dmz = results[7] as DmzConfig;
-      _firewall = results[8] as FirewallState;
-      _calls = results[9] as List<PhoneCallEntry>;
-      _contacts = results[10] as List<PhoneContact>;
-      _repeaters = results[11] as List<RepeaterInfo>;
-      _tvDecoders = results[12] as List<TvDecoderInfo>;
-      _wifiBands = results[13] as List<WifiBandConfig>;
-      _rebootHistory = results[14] as List<RebootEntry>;
-      _dynDnsHosts = results[15] as List<DynDnsHost>;
-      _staticRoutes = results[16] as List<StaticRoute>;
+      final interfaces = await _safeLoad('fetchInterfaces', repo.fetchInterfaces);
+      if (interfaces != null) _interfaces = interfaces;
+
+      final devices = await _safeLoad('fetchDevices', repo.fetchDevices);
+      if (devices != null) _devices = devices;
+
+      // Update UI immediately with core dashboard data
+      notifyListeners();
+
+      // Phase 2: Secondary sections (each isolated so unsupported APIs never block others)
+      final dhcpCfg = await _safeLoad('fetchDhcpConfig', repo.fetchDhcpConfig);
+      if (dhcpCfg != null) _dhcpConfig = dhcpCfg;
+
+      final dhcpBnd = await _safeLoad('fetchDhcpBindings', repo.fetchDhcpBindings);
+      if (dhcpBnd != null) _dhcpBindings = dhcpBnd;
+
+      final nat = await _safeLoad('fetchNatPatRules', repo.fetchNatPatRules);
+      if (nat != null) _natPatRules = nat;
+
+      final ptf = await _safeLoad('fetchPtfRules', repo.fetchPtfRules);
+      if (ptf != null) _ptfRules = ptf;
+
+      final dmz = await _safeLoad('fetchDmz', repo.fetchDmz);
+      if (dmz != null) _dmz = dmz;
+
+      final fw = await _safeLoad('fetchFirewall', repo.fetchFirewall);
+      if (fw != null) _firewall = fw;
+
+      final calls = await _safeLoad('fetchCallLog', repo.fetchCallLog);
+      if (calls != null) _calls = calls;
+
+      final contacts = await _safeLoad('fetchContacts', repo.fetchContacts);
+      if (contacts != null) _contacts = contacts;
+
+      final repeaters = await _safeLoad('fetchRepeaters', repo.fetchRepeaters);
+      if (repeaters != null) _repeaters = repeaters;
+
+      final decoders = await _safeLoad('fetchTvDecoders', repo.fetchTvDecoders);
+      if (decoders != null) _tvDecoders = decoders;
+
+      final wifiBands = await _safeLoad('fetchWifiBands', repo.fetchWifiBands);
+      if (wifiBands != null) _wifiBands = wifiBands;
+
+      final reboots = await _safeLoad('fetchRebootHistory', repo.fetchRebootHistory);
+      if (reboots != null) _rebootHistory = reboots;
+
+      final ddns = await _safeLoad('fetchDynDnsHosts', repo.fetchDynDnsHosts);
+      if (ddns != null) _dynDnsHosts = ddns;
+
+      final routes = await _safeLoad('fetchStaticRoutes', repo.fetchStaticRoutes);
+      if (routes != null) _staticRoutes = routes;
     } finally {
       _isRefreshing = false;
       notifyListeners();

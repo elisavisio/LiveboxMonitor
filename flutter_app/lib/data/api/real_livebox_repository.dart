@@ -94,25 +94,14 @@ class RealLiveboxRepository implements LiveboxRepository {
 
   @override
   Future<LiveboxInfo> fetchLiveboxInfo() async {
-    final results = await Future.wait([
-      _safeCallMap('DeviceInfo', method: 'get'),
-      _safeCallMap('DeviceInfo.MemoryStatus', method: 'get'),
-      _safeCallRawData('NMC', method: 'getWANStatus'),
-      _safeCallRawData('NMC.IPv6', method: 'get'),
-      _safeCallRawData('NMC', method: 'getLANIP'),
-      _safeCallMap('NMC.Wifi', method: 'get'),
-      _safeCallMap('NMC.Guest', method: 'get'),
-      _safeCallMap('LEDs.LED.Orange', method: 'get'),
-    ]);
-
-    final dev = results[0];
-    final mem = results[1];
-    final wan = results[2];
-    final ipv6 = results[3];
-    final lan = results[4];
-    final wifi = results[5];
-    final guest = results[6];
-    final led = results[7];
+    final dev = await _safeCallMap('DeviceInfo', method: 'get');
+    final mem = await _safeCallMap('DeviceInfo.MemoryStatus', method: 'get');
+    final wan = await _safeCallRawData('NMC', method: 'getWANStatus');
+    final ipv6 = await _safeCallRawData('NMC.IPv6', method: 'get');
+    final lan = await _safeCallRawData('NMC', method: 'getLANIP');
+    final wifi = await _safeCallMap('NMC.Wifi', method: 'get');
+    final guest = await _safeCallMap('NMC.Guest', method: 'get');
+    final led = await _safeCallMap('LEDs.LED.Orange', method: 'get');
 
     // Optional ONT / SFP optical info
     double? rxDbm;
@@ -723,8 +712,14 @@ class RealLiveboxRepository implements LiveboxRepository {
 
   @override
   Future<FirewallState> fetchFirewall() async {
-    final v4 = (await session.callNoCheck('Firewall', method: 'getFirewallLevel'))?.toString() ?? 'Medium';
-    final v6 = (await session.callNoCheck('Firewall', method: 'getFirewallIPv6Level'))?.toString() ?? 'Medium';
+    String v4 = 'Medium';
+    String v6 = 'Medium';
+    try {
+      v4 = (await session.callNoCheck('Firewall', method: 'getFirewallLevel'))?.toString() ?? 'Medium';
+    } catch (_) {}
+    try {
+      v6 = (await session.callNoCheck('Firewall', method: 'getFirewallIPv6Level'))?.toString() ?? 'Medium';
+    } catch (_) {}
     final ping = await _safeCallMap('Firewall', method: 'getRespondToPing', args: {'sourceInterface': 'data'});
     final customMap = await _safeCallMap('Firewall', method: 'getCustomRule', args: {'chain': 'Custom'});
 

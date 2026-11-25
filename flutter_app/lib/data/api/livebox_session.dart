@@ -37,12 +37,35 @@ class LiveboxSession {
   final List<String> _debugLogs = [];
   String? _lastErrorDetail;
 
+  // Embedded Livebox lighttpd resets connections under high parallelism.
+  // Cap concurrent in-flight HTTP requests to 2.
+  static const int _maxConcurrentRequests = 2;
+  int _inFlight = 0;
+  final List<Completer<void>> _waitQueue = [];
+
   LiveboxSession(String url, {this.sessionName = 'LiveboxMonitor'})
       : baseUrl = '${url.trim().replaceAll(RegExp(r'/+$'), '')}/';
 
   bool get isAuthenticated => _contextId != null && _client != null;
   List<String> get debugLogs => List.unmodifiable(_debugLogs);
   String? get lastErrorDetail => _lastErrorDetail;
+
+  Future<T> _withThrottle<T>(Future<T> Function() action) async {
+    if (_inFlight >= _maxConcurrentRequests) {
+      final waiter = Completer<void>();
+      _waitQueue.add(waiter);
+      await waiter.future;
+    }
+    _inFlight++;
+    try {
+      return await action();
+    } finally {
+      _inFlight--;
+      if (_waitQueue.isNotEmpty) {
+        _waitQueue.removeAt(0).complete();
+      }
+    }
+  }
 
   void _log(String message) {
     final ts = DateTime.now().toIso8601String().substring(11, 23);
@@ -55,6 +78,8 @@ class LiveboxSession {
   HttpClient _createClient() {
     final c = HttpClient();
     c.connectionTimeout = defaultTimeout;
+    c.maxConnectionsPerHost = _maxConcurrentRequests;
+    c.idleTimeout = const Duration(seconds: 4);
     // Livebox local HTTPS uses a self-signed certificate.
     c.badCertificateCallback = (cert, host, port) => true;
     return c;
@@ -363,41 +388,83 @@ class LiveboxSession {
     required Map<String, String> headers,
     required Duration timeout,
     String? logStep,
-  }) async {
-    final client = _client ?? _createClient();
-    final uri = Uri.parse(url);
-    final req = await client.postUrl(uri).timeout(timeout);
-    headers.forEach((k, v) => req.headers.set(k, v));
-    _attachCookies(req);
-    final bytes = utf8.encode(body);
-    req.headers.contentLength = bytes.length;
-    req.add(bytes);
-    final resp = await req.close().timeout(timeout);
-    _storeRawCookies(resp.headers[HttpHeaders.setCookieHeader], logStep: logStep);
-    if (logStep != null) {
-      _log('$logStep HTTP ${resp.statusCode} ${resp.reasonPhrase} (cookies=${_rawCookies.length})');
-    }
-    final respBytes = await resp
-        .fold<List<int>>([], (acc, chunk) => acc..addAll(chunk))
-        .timeout(timeout);
-    return utf8.decode(respBytes, allowMalformed: true);
+  }) {
+    return _withThrottle(() async {
+      for (int attempt = 0; attempt < 2; attempt++) {
+        try {
+          final client = _client ?? _createClient();
+          final uri = Uri.parse(url);
+          final req = await client.postUrl(uri).timeout(timeout);
+          headers.forEach((k, v) => req.headers.set(k, v));
+          if (attempt > 0) {
+            // Force a fresh TCP socket on retry after a peer reset
+            req.headers.set(HttpHeaders.connectionHeader, 'close');
+          }
+          _attachCookies(req);
+          final bytes = utf8.encode(body);
+          req.headers.contentLength = bytes.length;
+          req.add(bytes);
+          final resp = await req.close().timeout(timeout);
+          _storeRawCookies(resp.headers[HttpHeaders.setCookieHeader], logStep: logStep);
+          if (logStep != null) {
+            _log('$logStep HTTP ${resp.statusCode} ${resp.reasonPhrase} (cookies=${_rawCookies.length})');
+          }
+          final respBytes = await resp
+              .fold<List<int>>([], (acc, chunk) => acc..addAll(chunk))
+              .timeout(timeout);
+          return utf8.decode(respBytes, allowMalformed: true);
+        } on HttpException catch (e) {
+          if (attempt == 0) {
+            _log('Transient HttpException (${e.message}) on ${logStep ?? url}, retrying...');
+            await Future<void>.delayed(const Duration(milliseconds: 140));
+            continue;
+          }
+          rethrow;
+        } on SocketException catch (e) {
+          if (attempt == 0 && logStep != 'createContext') {
+            _log('Transient SocketException (${e.message}) on ${logStep ?? url}, retrying...');
+            await Future<void>.delayed(const Duration(milliseconds: 140));
+            continue;
+          }
+          rethrow;
+        }
+      }
+      throw LiveboxApiException('Request failed after retry');
+    });
   }
 
   Future<String> _getRaw(
     String url, {
     required Map<String, String> headers,
     required Duration timeout,
-  }) async {
-    final client = _client ?? _createClient();
-    final req = await client.getUrl(Uri.parse(url)).timeout(timeout);
-    headers.forEach((k, v) => req.headers.set(k, v));
-    _attachCookies(req);
-    final resp = await req.close().timeout(timeout);
-    _storeRawCookies(resp.headers[HttpHeaders.setCookieHeader]);
-    final respBytes = await resp
-        .fold<List<int>>([], (acc, chunk) => acc..addAll(chunk))
-        .timeout(timeout);
-    return utf8.decode(respBytes, allowMalformed: true);
+  }) {
+    return _withThrottle(() async {
+      for (int attempt = 0; attempt < 2; attempt++) {
+        try {
+          final client = _client ?? _createClient();
+          final req = await client.getUrl(Uri.parse(url)).timeout(timeout);
+          headers.forEach((k, v) => req.headers.set(k, v));
+          if (attempt > 0) {
+            req.headers.set(HttpHeaders.connectionHeader, 'close');
+          }
+          _attachCookies(req);
+          final resp = await req.close().timeout(timeout);
+          _storeRawCookies(resp.headers[HttpHeaders.setCookieHeader]);
+          final respBytes = await resp
+              .fold<List<int>>([], (acc, chunk) => acc..addAll(chunk))
+              .timeout(timeout);
+          return utf8.decode(respBytes, allowMalformed: true);
+        } on HttpException catch (e) {
+          if (attempt == 0) {
+            _log('Transient GET HttpException (${e.message}), retrying...');
+            await Future<void>.delayed(const Duration(milliseconds: 140));
+            continue;
+          }
+          rethrow;
+        }
+      }
+      throw LiveboxApiException('GET request failed after retry');
+    });
   }
 
   void _attachCookies(HttpClientRequest req) {
