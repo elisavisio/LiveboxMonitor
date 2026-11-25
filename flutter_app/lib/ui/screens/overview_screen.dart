@@ -27,7 +27,7 @@ class OverviewScreen extends StatelessWidget {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final activeDevices = controller.devices.where((d) => d.active).length;
+    final activeDevices = controller.devices.where((d) => d.isActiveWithIp).length;
     final totalDevices = controller.devices.length;
     final latestWan = controller.latestWanTraffic;
     final wanKey = controller.interfaces

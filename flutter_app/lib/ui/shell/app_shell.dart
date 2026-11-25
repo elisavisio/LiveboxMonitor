@@ -168,7 +168,7 @@ class _AppShellState extends State<AppShell> {
               _NavItem(
                 icon: Icons.devices_rounded,
                 label: s.navDevices,
-                badge: '${c.devices.where((d) => d.active).length}',
+                badge: '${c.devices.where((d) => d.isActiveWithIp).length}',
                 selected: _section == AppSection.devices,
                 collapsed: collapsed,
                 onTap: () => select(AppSection.devices),

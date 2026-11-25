@@ -8,6 +8,8 @@ import '../widgets/common_widgets.dart';
 
 enum _DeviceFilter { all, active, wifi, ethernet, blocked }
 
+enum _DeviceSort { name, ip, id, bandwidth }
+
 class DevicesScreen extends StatefulWidget {
   final AppController controller;
   const DevicesScreen({super.key, required this.controller});
@@ -18,7 +20,9 @@ class DevicesScreen extends StatefulWidget {
 
 class _DevicesScreenState extends State<DevicesScreen> {
   final TextEditingController _searchCtrl = TextEditingController();
-  _DeviceFilter _filter = _DeviceFilter.all;
+  _DeviceFilter _filter = _DeviceFilter.active;
+  _DeviceSort _sort = _DeviceSort.name;
+  bool _sortAscending = true;
   String? _selectedMac;
 
   @override
@@ -27,12 +31,30 @@ class _DevicesScreenState extends State<DevicesScreen> {
     super.dispose();
   }
 
+  static int _compareIp(String a, String b) {
+    final ta = a.trim();
+    final tb = b.trim();
+    if (ta.isEmpty && tb.isEmpty) return 0;
+    if (ta.isEmpty) return 1;
+    if (tb.isEmpty) return -1;
+    final pa = ta.split('.').map(int.tryParse).toList();
+    final pb = tb.split('.').map(int.tryParse).toList();
+    if (pa.length == 4 && pb.length == 4 && !pa.contains(null) && !pb.contains(null)) {
+      for (int i = 0; i < 4; i++) {
+        final cmp = pa[i]!.compareTo(pb[i]!);
+        if (cmp != 0) return cmp;
+      }
+      return 0;
+    }
+    return ta.compareTo(tb);
+  }
+
   List<NetworkDevice> _filteredDevices() {
     final q = _searchCtrl.text.trim().toLowerCase();
-    return widget.controller.devices.where((d) {
+    final list = widget.controller.devices.where((d) {
       switch (_filter) {
         case _DeviceFilter.active:
-          if (!d.active) return false;
+          if (!d.isActiveWithIp) return false;
         case _DeviceFilter.wifi:
           if (!d.isWifi) return false;
         case _DeviceFilter.ethernet:
@@ -48,11 +70,29 @@ class _DevicesScreenState extends State<DevicesScreen> {
           d.key.toLowerCase().contains(q) ||
           d.vendor.toLowerCase().contains(q) ||
           d.deviceType.toLowerCase().contains(q);
-    }).toList()
-      ..sort((a, b) {
-        if (a.active != b.active) return a.active ? -1 : 1;
-        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-      });
+    }).toList();
+
+    list.sort((a, b) {
+      int cmp;
+      switch (_sort) {
+        case _DeviceSort.name:
+          cmp = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+        case _DeviceSort.ip:
+          cmp = _compareIp(a.ipAddress, b.ipAddress);
+        case _DeviceSort.id:
+          cmp = a.key.toUpperCase().compareTo(b.key.toUpperCase());
+        case _DeviceSort.bandwidth:
+          cmp = a.totalBytesPerSec.compareTo(b.totalBytesPerSec);
+          if (cmp == 0) {
+            cmp = (a.rxBytes + a.txBytes).compareTo(b.rxBytes + b.txBytes);
+          }
+      }
+      if (cmp == 0) {
+        cmp = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      }
+      return _sortAscending ? cmp : -cmp;
+    });
+    return list;
   }
 
   Future<void> _showRenameDialog(NetworkDevice device) async {
@@ -302,6 +342,13 @@ class _DevicesScreenState extends State<DevicesScreen> {
               mono: true,
             ),
           InfoRow(
+            label: s.t('Live Bandwidth', 'Débit direct'),
+            value:
+                '↓ ${Formatters.bytesPerSecAsBitrate(selected.rxBytesPerSec)}  ·  ↑ ${Formatters.bytesPerSecAsBitrate(selected.txBytesPerSec)}',
+            mono: true,
+            valueColor: selected.totalBytesPerSec > 0 ? AppColors.info : null,
+          ),
+          InfoRow(
             label: s.t('Total Rx / Tx', 'Total Rx / Tx'),
             value: '${Formatters.bytes(selected.rxBytes)} / ${Formatters.bytes(selected.txBytes)}',
             mono: true,
@@ -404,12 +451,13 @@ class _DevicesScreenState extends State<DevicesScreen> {
     final devices = _filteredDevices();
     final selected = devices.where((d) => d.key == _selectedMac).firstOrNull ??
         (devices.isNotEmpty ? devices.first : null);
+    final activeWithIpCount = c.devices.where((d) => d.isActiveWithIp).length;
 
     return Padding(
       padding: const EdgeInsets.all(22),
       child: Column(
         children: [
-          // Filter & Search Toolbar
+          // Filter, Search & Sort Toolbar
           Card(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -419,12 +467,12 @@ class _DevicesScreenState extends State<DevicesScreen> {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   SizedBox(
-                    width: 260,
+                    width: 240,
                     child: TextField(
                       controller: _searchCtrl,
                       onChanged: (_) => setState(() {}),
                       decoration: InputDecoration(
-                        hintText: s.t('Filter by name, IP, MAC, vendor...', 'Filtrer par nom, IP, MAC...'),
+                        hintText: s.t('Filter by name, IP, MAC...', 'Filtrer par nom, IP, MAC...'),
                         prefixIcon: const Icon(Icons.search_rounded, size: 18),
                         suffixIcon: _searchCtrl.text.isNotEmpty
                             ? IconButton(
@@ -439,14 +487,14 @@ class _DevicesScreenState extends State<DevicesScreen> {
                     ),
                   ),
                   ChoiceChip(
+                    label: Text('${s.active} ($activeWithIpCount)'),
+                    selected: _filter == _DeviceFilter.active,
+                    onSelected: (_) => setState(() => _filter = _DeviceFilter.active),
+                  ),
+                  ChoiceChip(
                     label: Text('${s.t("All", "Tous")} (${c.devices.length})'),
                     selected: _filter == _DeviceFilter.all,
                     onSelected: (_) => setState(() => _filter = _DeviceFilter.all),
-                  ),
-                  ChoiceChip(
-                    label: Text('${s.active} (${c.devices.where((d) => d.active).length})'),
-                    selected: _filter == _DeviceFilter.active,
-                    onSelected: (_) => setState(() => _filter = _DeviceFilter.active),
                   ),
                   ChoiceChip(
                     label: Text('Wi-Fi (${c.devices.where((d) => d.isWifi).length})'),
@@ -462,6 +510,68 @@ class _DevicesScreenState extends State<DevicesScreen> {
                     label: Text('${s.t("Blocked", "Bloqués")} (${c.devices.where((d) => d.blocked).length})'),
                     selected: _filter == _DeviceFilter.blocked,
                     onSelected: (_) => setState(() => _filter = _DeviceFilter.blocked),
+                  ),
+                  // Sort selector + direction button
+                  Container(
+                    padding: const EdgeInsets.only(left: 10, right: 4),
+                    decoration: BoxDecoration(
+                      color: context.subtleSurface,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: context.borderColor),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.sort_rounded, size: 16, color: context.textSecondary),
+                        const SizedBox(width: 6),
+                        DropdownButtonHideUnderline(
+                          child: DropdownButton<_DeviceSort>(
+                            value: _sort,
+                            isDense: true,
+                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 12.5),
+                            items: [
+                              DropdownMenuItem(
+                                value: _DeviceSort.name,
+                                child: Text(s.t('Sort: Name', 'Tri : Nom')),
+                              ),
+                              DropdownMenuItem(
+                                value: _DeviceSort.ip,
+                                child: Text(s.t('Sort: IP', 'Tri : IP')),
+                              ),
+                              DropdownMenuItem(
+                                value: _DeviceSort.id,
+                                child: Text(s.t('Sort: ID (MAC)', 'Tri : ID (MAC)')),
+                              ),
+                              DropdownMenuItem(
+                                value: _DeviceSort.bandwidth,
+                                child: Text(s.t('Sort: Bandwidth', 'Tri : Débit')),
+                              ),
+                            ],
+                            onChanged: (v) {
+                              if (v == null) return;
+                              setState(() {
+                                _sort = v;
+                                // Bandwidth defaults to highest first; Name/IP/ID default to ascending
+                                _sortAscending = v != _DeviceSort.bandwidth;
+                              });
+                            },
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: _sortAscending
+                              ? s.t('Ascending', 'Croissant')
+                              : s.t('Descending', 'Décroissant'),
+                          visualDensity: VisualDensity.compact,
+                          iconSize: 16,
+                          onPressed: () => setState(() => _sortAscending = !_sortAscending),
+                          icon: Icon(
+                            _sortAscending
+                                ? Icons.arrow_upward_rounded
+                                : Icons.arrow_downward_rounded,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -629,19 +739,43 @@ class _DevicesScreenState extends State<DevicesScreen> {
                                         ),
                                       if (showRateCol)
                                         SizedBox(
-                                          width: 88,
-                                          child: Text(
-                                            d.active
-                                                ? Formatters.bytesPerSecAsBitrate(d.rxBytesPerSec)
-                                                : s.offline,
-                                            textAlign: TextAlign.right,
-                                            style: AppTheme.monoStyle.copyWith(
-                                              fontSize: 11.5,
-                                              color: d.active
-                                                  ? AppColors.info
-                                                  : context.textSecondary,
-                                            ),
-                                          ),
+                                          width: 102,
+                                          child: d.active
+                                              ? Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    Text(
+                                                      '↓ ${Formatters.bytesPerSecAsBitrate(d.rxBytesPerSec)}',
+                                                      style: AppTheme.monoStyle.copyWith(
+                                                        fontSize: 11.5,
+                                                        fontWeight: d.rxBytesPerSec > 0
+                                                            ? FontWeight.w600
+                                                            : FontWeight.w400,
+                                                        color: d.rxBytesPerSec > 0
+                                                            ? AppColors.info
+                                                            : context.textSecondary,
+                                                      ),
+                                                    ),
+                                                    Text(
+                                                      '↑ ${Formatters.bytesPerSecAsBitrate(d.txBytesPerSec)}',
+                                                      style: AppTheme.monoStyle.copyWith(
+                                                        fontSize: 10.5,
+                                                        color: d.txBytesPerSec > 0
+                                                            ? AppColors.purple
+                                                            : context.textSecondary,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                )
+                                              : Text(
+                                                  s.offline,
+                                                  textAlign: TextAlign.right,
+                                                  style: AppTheme.monoStyle.copyWith(
+                                                    fontSize: 11.5,
+                                                    color: context.textSecondary,
+                                                  ),
+                                                ),
                                         ),
                                       if (!showSplitPane) ...[
                                         const SizedBox(width: 4),

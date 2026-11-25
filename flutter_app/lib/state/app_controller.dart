@@ -286,7 +286,18 @@ class AppController extends ChangeNotifier {
           list.add(entry.value);
           if (list.length > 60) list.removeAt(0);
         }
+        // Keep interface live Rx/Tx bitrates updated on real Livebox too
+        _interfaces = _interfaces.map((intf) {
+          final s = samples[intf.key];
+          if (s == null) return intf;
+          return intf.copyWith(
+            rxBytesPerSec: s.downMbps * 125000.0,
+            txBytesPerSec: s.upMbps * 125000.0,
+          );
+        }).toList();
       }
+
+      // Poll events first so Devices.Device Statistics events update device stats
       final newEvents = await _repo!.pollEvents();
       if (newEvents.isNotEmpty) {
         _events.insertAll(0, newEvents.reversed);
@@ -294,6 +305,22 @@ class AppController extends ChangeNotifier {
           _events.removeRange(500, _events.length);
         }
       }
+
+      // Sample per-device bandwidth (Wi-Fi getStationStats + Statistics events)
+      final devStats = await _repo!.sampleDeviceTraffic(_interfaces);
+      if (devStats.isNotEmpty && _devices.isNotEmpty) {
+        _devices = _devices.map((d) {
+          final st = devStats[d.key];
+          if (st == null) return d;
+          return d.copyWith(
+            rxBytes: st.rxBytes,
+            txBytes: st.txBytes,
+            rxBytesPerSec: st.rxBytesPerSec,
+            txBytesPerSec: st.txBytesPerSec,
+          );
+        }).toList();
+      }
+
       if (isDemo) {
         _info = await _repo!.fetchLiveboxInfo();
         _interfaces = await _repo!.fetchInterfaces();

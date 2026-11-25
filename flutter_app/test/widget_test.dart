@@ -214,5 +214,56 @@ void main() {
       await controller.disconnect();
       await tester.pump();
     });
+
+    testWidgets('Devices tab defaults to Active (with IP) and supports Name/IP/ID/Bandwidth sort',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1440, 920);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final controller = AppController();
+      await controller.initialize();
+      await tester.pumpWidget(LiveboxMonitorApp(controller: controller));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.textContaining('Launch Interactive Demo Mode'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      await tester.tap(find.text('Devices').first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      // Active is selected by default -> offline devices (Epson EcoTank Printer) are hidden
+      expect(find.text('Epson EcoTank Printer'), findsNothing);
+      expect(find.text('Garden IP Camera'), findsAtLeastNWidgets(1));
+
+      // Sort selector defaults to Name; switch to Bandwidth -> highest consumer (Synology NAS) jumps to top!
+      expect(find.text('Sort: Name'), findsOneWidget);
+      await tester.tap(find.text('Sort: Name'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Sort: Bandwidth').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Sort: Bandwidth'), findsOneWidget);
+      expect(find.text('Synology DS923+ NAS'), findsAtLeastNWidgets(1));
+
+      // Switch to Sort: IP and Sort: ID (MAC)
+      await tester.tap(find.text('Sort: Bandwidth'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Sort: IP').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Sort: IP'), findsOneWidget);
+
+      await tester.tap(find.text('Sort: IP'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Sort: ID (MAC)').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Sort: ID (MAC)'), findsOneWidget);
+
+      expect(tester.takeException(), isNull);
+      await controller.disconnect();
+      await tester.pump();
+    });
   });
 }

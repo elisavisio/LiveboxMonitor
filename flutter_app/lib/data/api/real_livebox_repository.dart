@@ -12,8 +12,13 @@ class RealLiveboxRepository implements LiveboxRepository {
   final LiveboxSession session;
   final String label;
 
-  // Previous byte counters for computing delta bitrates per interface
+  // Previous byte counters for computing delta bitrates per interface & device
   final Map<String, ({int rx, int tx, DateTime ts})> _prevCounters = {};
+  final Map<String, ({int rx, int tx, DateTime ts})> _prevDeviceEventCounters = {};
+  final Map<String, ({int rx, int tx, DateTime ts})> _prevWifiStationCounters = {};
+  final Map<String, DeviceTrafficStats> _deviceStats = {};
+  static final RegExp _macRegex =
+      RegExp(r'([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})');
   List<NetworkDevice> _cachedDevices = [];
   List<TvDecoderInfo> _cachedDecoders = [];
   int _eventCounter = 0;
@@ -346,6 +351,7 @@ class RealLiveboxRepository implements LiveboxRepository {
 
       final name = item['Name']?.toString() ?? mac;
       final downKbps = (item['LastDataDownlinkRate'] as num?)?.toInt();
+      final cachedStat = _deviceStats[mac];
 
       devices.add(NetworkDevice(
         key: mac,
@@ -365,10 +371,10 @@ class RealLiveboxRepository implements LiveboxRepository {
         linkType: linkType,
         rssi: (item['SignalStrength'] as num?)?.toInt(),
         linkSpeedMbps: downKbps != null ? (downKbps ~/ 1000) : null,
-        rxBytes: 0,
-        txBytes: 0,
-        rxBytesPerSec: 0,
-        txBytesPerSec: 0,
+        rxBytes: cachedStat?.rxBytes ?? 0,
+        txBytes: cachedStat?.txBytes ?? 0,
+        rxBytesPerSec: cachedStat?.rxBytesPerSec ?? 0,
+        txBytesPerSec: cachedStat?.txBytesPerSec ?? 0,
         firstSeen: DateTime.tryParse(item['FirstSeen']?.toString() ?? ''),
         lastChanged: DateTime.tryParse(item['LastChanged']?.toString() ?? ''),
         tags: tags,
@@ -421,6 +427,16 @@ class RealLiveboxRepository implements LiveboxRepository {
     await session.callNoCheck('Devices', method: 'destroyDevice', args: {'key': mac});
   }
 
+  static int _deltaCounter(int current, int previous) {
+    if (current >= previous) return current - previous;
+    // Handle 32-bit unsigned counter wrap (4 GiB) on Livebox NetDev/station stats
+    const uint32Max = 0x100000000;
+    if (previous < uint32Max && current < uint32Max) {
+      return (uint32Max - previous) + current;
+    }
+    return 0;
+  }
+
   @override
   Future<Map<String, TrafficSample>> sampleTraffic(List<String> interfaceKeys) async {
     final now = DateTime.now();
@@ -429,6 +445,10 @@ class RealLiveboxRepository implements LiveboxRepository {
     for (final key in interfaceKeys) {
       try {
         final stats = await _safeCallMap('NeMo.Intf.$key', method: 'getNetDevStats');
+        if (stats.isEmpty ||
+            (stats['RxBytes'] == null && stats['TxBytes'] == null)) {
+          continue;
+        }
         final rx = (stats['RxBytes'] as num?)?.toInt() ?? 0;
         final tx = (stats['TxBytes'] as num?)?.toInt() ?? 0;
         final prev = _prevCounters[key];
@@ -436,9 +456,9 @@ class RealLiveboxRepository implements LiveboxRepository {
 
         if (prev != null) {
           final dtSec = now.difference(prev.ts).inMilliseconds / 1000.0;
-          if (dtSec > 0) {
-            final dRx = rx >= prev.rx ? rx - prev.rx : rx;
-            final dTx = tx >= prev.tx ? tx - prev.tx : tx;
+          if (dtSec > 0.1) {
+            final dRx = _deltaCounter(rx, prev.rx);
+            final dTx = _deltaCounter(tx, prev.tx);
             out[key] = TrafficSample(
               timestamp: now,
               downMbps: (dRx * 8.0) / (dtSec * 1e6),
@@ -451,6 +471,97 @@ class RealLiveboxRepository implements LiveboxRepository {
       } catch (_) {}
     }
     return out;
+  }
+
+  @override
+  Future<Map<String, DeviceTrafficStats>> sampleDeviceTraffic(
+      List<NetworkInterfaceInfo> interfaces) async {
+    final now = DateTime.now();
+
+    // Poll real-time Wi-Fi station stats on each Wi-Fi VAP interface
+    // (mirrors LiveboxWifiStatsThread in LmDeviceListTab.py)
+    for (final intf in interfaces) {
+      if (intf.type != 'wif' && intf.type != 'gwi') continue;
+      try {
+        final raw = await session.callNoCheck(
+          'NeMo.Intf.${intf.key}',
+          method: 'getStationStats',
+        );
+        if (raw is! List) continue;
+        for (final stat in raw) {
+          if (stat is! Map) continue;
+          final mac = (stat['MACAddress']?.toString() ?? '').toUpperCase();
+          if (mac.isEmpty) continue;
+
+          // Router TxBytes = device download (Rx), Router RxBytes = device upload (Tx)
+          final devRx = (stat['TxBytes'] as num?)?.toInt() ?? 0;
+          final devTx = (stat['RxBytes'] as num?)?.toInt() ?? 0;
+          final stationKey = '${mac}_${intf.key}';
+          final prev = _prevWifiStationCounters[stationKey];
+          _prevWifiStationCounters[stationKey] = (rx: devRx, tx: devTx, ts: now);
+
+          double rxRate = _deviceStats[mac]?.rxBytesPerSec ?? 0;
+          double txRate = _deviceStats[mac]?.txBytesPerSec ?? 0;
+          if (prev != null) {
+            final dtSec = now.difference(prev.ts).inMilliseconds / 1000.0;
+            if (dtSec > 0.1) {
+              rxRate = _deltaCounter(devRx, prev.rx) / dtSec;
+              txRate = _deltaCounter(devTx, prev.tx) / dtSec;
+            }
+          }
+
+          final existing = _deviceStats[mac];
+          _deviceStats[mac] = DeviceTrafficStats(
+            rxBytes: devRx > (existing?.rxBytes ?? 0) ? devRx : (existing?.rxBytes ?? devRx),
+            txBytes: devTx > (existing?.txBytes ?? 0) ? devTx : (existing?.txBytes ?? devTx),
+            rxBytesPerSec: rxRate,
+            txBytesPerSec: txRate,
+          );
+        }
+      } catch (_) {}
+    }
+
+    return Map<String, DeviceTrafficStats>.of(_deviceStats);
+  }
+
+  void _processDeviceStatisticsEvent(String mac, Map<dynamic, dynamic> attr) {
+    // Attributes can be keyed by MAC (matching case or lowercase) or direct RxBytes/TxBytes
+    Map<dynamic, dynamic>? statMap;
+    if (attr.containsKey('RxBytes') || attr.containsKey('TxBytes')) {
+      statMap = attr;
+    } else {
+      for (final entry in attr.entries) {
+        if (entry.key.toString().toUpperCase() == mac && entry.value is Map) {
+          statMap = entry.value as Map;
+          break;
+        }
+      }
+    }
+    if (statMap == null) return;
+
+    final rx = (statMap['RxBytes'] as num?)?.toInt() ?? 0;
+    final tx = (statMap['TxBytes'] as num?)?.toInt() ?? 0;
+    final ts = DateTime.tryParse(statMap['Timestamp']?.toString() ?? '') ?? DateTime.now();
+
+    final prev = _prevDeviceEventCounters[mac];
+    _prevDeviceEventCounters[mac] = (rx: rx, tx: tx, ts: ts);
+
+    double rxRate = _deviceStats[mac]?.rxBytesPerSec ?? 0;
+    double txRate = _deviceStats[mac]?.txBytesPerSec ?? 0;
+    if (prev != null) {
+      final dtSec = ts.difference(prev.ts).inMilliseconds / 1000.0;
+      if (dtSec > 0.1) {
+        rxRate = _deltaCounter(rx, prev.rx) / dtSec;
+        txRate = _deltaCounter(tx, prev.tx) / dtSec;
+      }
+    }
+
+    _deviceStats[mac] = DeviceTrafficStats(
+      rxBytes: rx,
+      txBytes: tx,
+      rxBytesPerSec: rxRate,
+      txBytesPerSec: txRate,
+    );
   }
 
   @override
@@ -471,10 +582,19 @@ class RealLiveboxRepository implements LiveboxRepository {
           ? data['object'] as Map<String, dynamic>
           : <String, dynamic>{};
       final reason = obj['reason']?.toString() ?? 'event';
+
       String devKey = 'LIVEBOX';
-      if (handler.startsWith('Devices.Device.')) {
+      final macMatch = _macRegex.firstMatch(handler);
+      if (macMatch != null) {
+        devKey = macMatch.group(1)!.toUpperCase();
+      } else if (handler.startsWith('Devices.Device.')) {
         devKey = handler.replaceFirst('Devices.Device.', '').split('.').first.toUpperCase();
       }
+
+      if (reason == 'Statistics' && devKey != 'LIVEBOX' && obj['attributes'] is Map) {
+        _processDeviceStatisticsEvent(devKey, obj['attributes'] as Map);
+      }
+
       final match = _cachedDevices.where((d) => d.key == devKey).firstOrNull;
       out.add(LiveboxEvent(
         id: 'ev_${++_eventCounter}',

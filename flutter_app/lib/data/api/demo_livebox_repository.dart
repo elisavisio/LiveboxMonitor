@@ -1059,6 +1059,42 @@ class DemoLiveboxRepository implements LiveboxRepository {
   }
 
   @override
+  Future<Map<String, DeviceTrafficStats>> sampleDeviceTraffic(
+      List<NetworkInterfaceInfo> interfaces) async {
+    final out = <String, DeviceTrafficStats>{};
+    for (int i = 0; i < _devices.length; i++) {
+      final d = _devices[i];
+      if (!d.isActiveWithIp) {
+        out[d.key] = DeviceTrafficStats(
+          rxBytes: d.rxBytes,
+          txBytes: d.txBytes,
+          rxBytesPerSec: 0,
+          txBytesPerSec: 0,
+        );
+        continue;
+      }
+      final factor = 0.75 + _rng.nextDouble() * 0.55;
+      final rxRate = max(0.0, d.rxBytesPerSec * factor);
+      final txRate = max(0.0, d.txBytesPerSec * factor);
+      final newRx = d.rxBytes + (rxRate * 2).toInt();
+      final newTx = d.txBytes + (txRate * 2).toInt();
+      _devices[i] = d.copyWith(
+        rxBytes: newRx,
+        txBytes: newTx,
+        rxBytesPerSec: rxRate,
+        txBytesPerSec: txRate,
+      );
+      out[d.key] = DeviceTrafficStats(
+        rxBytes: newRx,
+        txBytes: newTx,
+        rxBytesPerSec: rxRate,
+        txBytesPerSec: txRate,
+      );
+    }
+    return out;
+  }
+
+  @override
   Future<List<LiveboxEvent>> pollEvents() async {
     if (_pendingEvents.isEmpty) return [];
     final copy = List<LiveboxEvent>.of(_pendingEvents);

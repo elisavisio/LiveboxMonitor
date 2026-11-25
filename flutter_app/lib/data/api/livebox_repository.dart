@@ -22,6 +22,8 @@ abstract class LiveboxRepository {
 
   // Real-time traffic & events
   Future<Map<String, TrafficSample>> sampleTraffic(List<String> interfaceKeys);
+  Future<Map<String, DeviceTrafficStats>> sampleDeviceTraffic(
+      List<NetworkInterfaceInfo> interfaces);
   Future<List<LiveboxEvent>> pollEvents();
 
   // DHCP

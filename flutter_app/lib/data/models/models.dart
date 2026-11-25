@@ -322,6 +322,12 @@ class NetworkDevice {
   bool get isWifi =>
       linkType.startsWith('wifi') || linkType == 'guest' || rssi != null;
 
+  bool get hasIp => ipAddress.trim().isNotEmpty;
+
+  bool get isActiveWithIp => active && hasIp;
+
+  double get totalBytesPerSec => rxBytesPerSec + txBytesPerSec;
+
   NetworkDevice copyWith({
     String? name,
     String? liveboxName,
@@ -374,6 +380,21 @@ class TrafficSample {
     required this.timestamp,
     required this.downMbps,
     required this.upMbps,
+  });
+}
+
+/// Live per-device cumulative bytes and instant throughput.
+class DeviceTrafficStats {
+  final int rxBytes;
+  final int txBytes;
+  final double rxBytesPerSec;
+  final double txBytesPerSec;
+
+  const DeviceTrafficStats({
+    required this.rxBytes,
+    required this.txBytes,
+    required this.rxBytesPerSec,
+    required this.txBytesPerSec,
   });
 }
 
