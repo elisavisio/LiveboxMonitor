@@ -30,13 +30,15 @@ Ensure [Flutter](https://docs.flutter.dev/get-started/install) (`>= 3.24` / Dart
 cd flutter_app
 flutter pub get
 
-# Run on your desktop OS:
+# Run on Desktop or iPad:
 flutter run -d macos    # macOS
+flutter run -d ios      # iPad / iPadOS Simulator or connected iPad
 flutter run -d windows  # Windows
 flutter run -d linux    # Linux
 
 # Release builds:
 flutter build macos --release
+flutter build ipa --release
 flutter build windows --release
 flutter build linux --release
 ```

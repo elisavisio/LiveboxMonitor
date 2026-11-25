@@ -157,94 +157,91 @@ class _FirewallScreenState extends State<FirewallScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // IPv4 & IPv6 Security Levels
-              Expanded(
-                flex: 3,
-                child: SectionCard(
-                  title: s.t('Firewall Security Levels', 'Niveaux de sécurité du pare-feu'),
-                  subtitle: s.t(
-                    'Select predefined protection profiles or switch to Custom for fine-grained rules.',
-                    'Choisissez un niveau de protection prédéfini ou Personnalisé.',
-                  ),
-                  icon: Icons.shield_rounded,
-                  iconColor: _levelColor(fw.ipv4Level),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('IPv4 Firewall',
-                          style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: context.textSecondary)),
-                      const SizedBox(height: 8),
-                      SegmentedButton<String>(
-                        segments: _levels
-                            .map((l) => ButtonSegment(value: l, label: Text(l)))
-                            .toList(),
-                        selected: {
-                          _levels.contains(fw.ipv4Level) ? fw.ipv4Level : 'Medium',
-                        },
-                        onSelectionChanged: (v) =>
-                            c.setFirewallLevels(v.first, fw.ipv6Level),
-                      ),
-                      const SizedBox(height: 18),
-                      Text('IPv6 Firewall',
-                          style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: context.textSecondary)),
-                      const SizedBox(height: 8),
-                      SegmentedButton<String>(
-                        segments: _levels
-                            .map((l) => ButtonSegment(value: l, label: Text(l)))
-                            .toList(),
-                        selected: {
-                          _levels.contains(fw.ipv6Level) ? fw.ipv6Level : 'Medium',
-                        },
-                        onSelectionChanged: (v) =>
-                            c.setFirewallLevels(fw.ipv4Level, v.first),
-                      ),
-                    ],
-                  ),
-                ),
+          ResponsiveRow(
+            leftFlex: 3,
+            rightFlex: 2,
+            breakpoint: 840,
+            left: SectionCard(
+              title: s.t('Firewall Security Levels', 'Niveaux de sécurité du pare-feu'),
+              subtitle: s.t(
+                'Select predefined protection profiles or switch to Custom for fine-grained rules.',
+                'Choisissez un niveau de protection prédéfini ou Personnalisé.',
               ),
-              const SizedBox(width: 16),
-              // Ping Responses
-              Expanded(
-                flex: 2,
-                child: SectionCard(
-                  title: s.t('ICMP Ping Responses', 'Réponses au Ping (ICMP)'),
-                  subtitle: s.t(
-                    'Control whether Livebox replies to WAN ping probes.',
-                    'Contrôle la réponse aux requêtes ping depuis Internet.',
+              icon: Icons.shield_rounded,
+              iconColor: _levelColor(fw.ipv4Level),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('IPv4 Firewall',
+                      style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: context.textSecondary)),
+                  const SizedBox(height: 8),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: SegmentedButton<String>(
+                      segments: _levels
+                          .map((l) => ButtonSegment(value: l, label: Text(l)))
+                          .toList(),
+                      selected: {
+                        _levels.contains(fw.ipv4Level) ? fw.ipv4Level : 'Medium',
+                      },
+                      onSelectionChanged: (v) =>
+                          c.setFirewallLevels(v.first, fw.ipv6Level),
+                    ),
                   ),
-                  icon: Icons.radar_rounded,
-                  iconColor: AppColors.info,
-                  child: Column(
-                    children: [
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('Respond to IPv4 Ping', style: TextStyle(fontSize: 13.5)),
-                        subtitle: Text(
-                          fw.respondToPingIpv4 ? s.enabled : s.disabled,
-                          style: TextStyle(fontSize: 12, color: context.textSecondary),
-                        ),
-                        value: fw.respondToPingIpv4,
-                        onChanged: (v) => c.setRespondToPing(v, fw.respondToPingIpv6),
-                      ),
-                      Divider(height: 1, color: context.borderColor),
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('Respond to IPv6 Ping', style: TextStyle(fontSize: 13.5)),
-                        subtitle: Text(
-                          fw.respondToPingIpv6 ? s.enabled : s.disabled,
-                          style: TextStyle(fontSize: 12, color: context.textSecondary),
-                        ),
-                        value: fw.respondToPingIpv6,
-                        onChanged: (v) => c.setRespondToPing(fw.respondToPingIpv4, v),
-                      ),
-                    ],
+                  const SizedBox(height: 18),
+                  Text('IPv6 Firewall',
+                      style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: context.textSecondary)),
+                  const SizedBox(height: 8),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: SegmentedButton<String>(
+                      segments: _levels
+                          .map((l) => ButtonSegment(value: l, label: Text(l)))
+                          .toList(),
+                      selected: {
+                        _levels.contains(fw.ipv6Level) ? fw.ipv6Level : 'Medium',
+                      },
+                      onSelectionChanged: (v) =>
+                          c.setFirewallLevels(fw.ipv4Level, v.first),
+                    ),
                   ),
-                ),
+                ],
               ),
-            ],
+            ),
+            right: SectionCard(
+              title: s.t('ICMP Ping Responses', 'Réponses au Ping (ICMP)'),
+              subtitle: s.t(
+                'Control whether Livebox replies to WAN ping probes.',
+                'Contrôle la réponse aux requêtes ping depuis Internet.',
+              ),
+              icon: Icons.radar_rounded,
+              iconColor: AppColors.info,
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Respond to IPv4 Ping', style: TextStyle(fontSize: 13.5)),
+                    subtitle: Text(
+                      fw.respondToPingIpv4 ? s.enabled : s.disabled,
+                      style: TextStyle(fontSize: 12, color: context.textSecondary),
+                    ),
+                    value: fw.respondToPingIpv4,
+                    onChanged: (v) => c.setRespondToPing(v, fw.respondToPingIpv6),
+                  ),
+                  Divider(height: 1, color: context.borderColor),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Respond to IPv6 Ping', style: TextStyle(fontSize: 13.5)),
+                    subtitle: Text(
+                      fw.respondToPingIpv6 ? s.enabled : s.disabled,
+                      style: TextStyle(fontSize: 12, color: context.textSecondary),
+                    ),
+                    value: fw.respondToPingIpv6,
+                    onChanged: (v) => c.setRespondToPing(fw.respondToPingIpv4, v),
+                  ),
+                ],
+              ),
+            ),
           ),
           const SizedBox(height: 18),
 

@@ -107,7 +107,6 @@ class _EventsScreenState extends State<EventsScreen> {
           ev.deviceKey.toLowerCase().contains(q);
     }).toList();
 
-    // Unique devices with event counts
     final counts = <String, ({String name, int count})>{};
     for (final ev in c.events) {
       final cur = counts[ev.deviceKey];
@@ -118,14 +117,17 @@ class _EventsScreenState extends State<EventsScreen> {
       padding: const EdgeInsets.all(22),
       child: Column(
         children: [
-          // Toolbar
+          // Responsive Wrap Toolbar
           Card(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              child: Row(
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   SizedBox(
-                    width: 290,
+                    width: 260,
                     child: TextField(
                       controller: _searchCtrl,
                       onChanged: (_) => setState(() {}),
@@ -135,7 +137,6 @@ class _EventsScreenState extends State<EventsScreen> {
                       ),
                     ),
                   ),
-                  const Spacer(),
                   OutlinedButton.icon(
                     onPressed: c.togglePollingPaused,
                     icon: Icon(
@@ -146,7 +147,6 @@ class _EventsScreenState extends State<EventsScreen> {
                       c.pollingPaused ? s.t('Resume Stream', 'Reprendre') : s.t('Pause', 'Pause'),
                     ),
                   ),
-                  const SizedBox(width: 8),
                   OutlinedButton.icon(
                     onPressed: events.isEmpty
                         ? null
@@ -169,7 +169,6 @@ class _EventsScreenState extends State<EventsScreen> {
                     icon: const Icon(Icons.download_rounded, size: 16),
                     label: Text(s.exportCsv),
                   ),
-                  const SizedBox(width: 8),
                   OutlinedButton.icon(
                     onPressed: c.events.isEmpty ? null : c.clearEvents,
                     icon: const Icon(Icons.delete_sweep_outlined, size: 16),
@@ -182,124 +181,202 @@ class _EventsScreenState extends State<EventsScreen> {
           const SizedBox(height: 16),
 
           Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Left device filter list
-                SizedBox(
-                  width: 260,
-                  child: Card(
-                    clipBehavior: Clip.antiAlias,
-                    child: ListView(
-                      children: [
-                        ListTile(
-                          selected: _selectedDeviceKey == null,
-                          selectedTileColor: AppColors.orange.withValues(alpha: 0.12),
-                          leading: const Icon(Icons.all_inclusive_rounded, size: 18),
-                          title: Text(s.t('All Sources', 'Toutes les sources'),
-                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                          trailing: StatusPill(
-                            label: '${c.events.length}',
-                            color: AppColors.orange,
-                          ),
-                          onTap: () => setState(() => _selectedDeviceKey = null),
-                        ),
-                        Divider(height: 1, color: context.borderColor),
-                        ...counts.entries.map((e) => ListTile(
-                              dense: true,
-                              selected: _selectedDeviceKey == e.key,
-                              selectedTileColor: AppColors.orange.withValues(alpha: 0.12),
-                              title: Text(e.value.name,
-                                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500),
-                                  overflow: TextOverflow.ellipsis),
-                              subtitle: Text(e.key,
-                                  style: AppTheme.monoStyle.copyWith(fontSize: 10.5)),
-                              trailing: Text('${e.value.count}',
-                                  style: AppTheme.monoStyle.copyWith(fontSize: 11.5)),
-                              onTap: () => setState(() => _selectedDeviceKey = e.key),
-                            )),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final showSidebar = constraints.maxWidth >= 860;
 
-                // Right live event log
-                Expanded(
-                  child: Card(
-                    clipBehavior: Clip.antiAlias,
-                    child: events.isEmpty
-                        ? EmptyStateView(
-                            icon: Icons.notifications_none_rounded,
-                            title: s.t('No events recorded yet', 'Aucun événement enregistré'),
-                            subtitle: s.t(
-                              'Livebox sysbus events will appear here automatically.',
-                              'Les événements Livebox apparaîtront ici automatiquement.',
-                            ),
-                          )
-                        : ListView.separated(
-                            itemCount: events.length,
-                            separatorBuilder: (_, _) =>
-                                Divider(height: 1, color: context.borderColor),
-                            itemBuilder: (context, index) {
-                              final ev = events[index];
-                              return InkWell(
-                                onTap: () => _showPayloadDialog(ev),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 14, vertical: 11),
-                                  child: Row(
-                                    children: [
-                                      SizedBox(
-                                        width: 72,
-                                        child: Text(
-                                          Formatters.timeHms(ev.timestamp),
-                                          style: AppTheme.monoStyle.copyWith(
-                                            fontSize: 11.5,
-                                            color: context.textSecondary,
-                                          ),
-                                        ),
-                                      ),
-                                      SizedBox(
-                                        width: 130,
-                                        child: Align(
-                                          alignment: Alignment.centerLeft,
-                                          child: StatusPill(
-                                            label: ev.reason,
-                                            color: _reasonColor(ev.reason),
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      SizedBox(
-                                        width: 160,
-                                        child: Text(
-                                          ev.deviceName,
-                                          style: const TextStyle(
-                                              fontSize: 12.5, fontWeight: FontWeight.w600),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Text(
-                                          ev.summary,
-                                          style: TextStyle(
-                                              fontSize: 12.5, color: context.textSecondary),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                      Icon(Icons.chevron_right_rounded,
-                                          size: 18, color: context.textSecondary),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
+                final eventListCard = Card(
+                  clipBehavior: Clip.antiAlias,
+                  child: events.isEmpty
+                      ? EmptyStateView(
+                          icon: Icons.notifications_none_rounded,
+                          title: s.t('No events recorded yet', 'Aucun événement enregistré'),
+                          subtitle: s.t(
+                            'Livebox sysbus events will appear here automatically.',
+                            'Les événements Livebox apparaîtront ici automatiquement.',
                           ),
-                  ),
-                ),
-              ],
+                        )
+                      : ListView.separated(
+                          itemCount: events.length,
+                          separatorBuilder: (_, _) =>
+                              Divider(height: 1, color: context.borderColor),
+                          itemBuilder: (context, index) {
+                            final ev = events[index];
+                            return InkWell(
+                              onTap: () => _showPayloadDialog(ev),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 11),
+                                child: showSidebar
+                                    ? Row(
+                                        children: [
+                                          SizedBox(
+                                            width: 72,
+                                            child: Text(
+                                              Formatters.timeHms(ev.timestamp),
+                                              style: AppTheme.monoStyle.copyWith(
+                                                fontSize: 11.5,
+                                                color: context.textSecondary,
+                                              ),
+                                            ),
+                                          ),
+                                          SizedBox(
+                                            width: 130,
+                                            child: Align(
+                                              alignment: Alignment.centerLeft,
+                                              child: StatusPill(
+                                                label: ev.reason,
+                                                color: _reasonColor(ev.reason),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          SizedBox(
+                                            width: 150,
+                                            child: Text(
+                                              ev.deviceName,
+                                              style: const TextStyle(
+                                                  fontSize: 12.5, fontWeight: FontWeight.w600),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Text(
+                                              ev.summary,
+                                              style: TextStyle(
+                                                  fontSize: 12.5, color: context.textSecondary),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          Icon(Icons.chevron_right_rounded,
+                                              size: 18, color: context.textSecondary),
+                                        ],
+                                      )
+                                    : Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              StatusPill(
+                                                label: ev.reason,
+                                                color: _reasonColor(ev.reason),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(
+                                                  ev.deviceName,
+                                                  overflow: TextOverflow.ellipsis,
+                                                  style: const TextStyle(
+                                                      fontSize: 13, fontWeight: FontWeight.w600),
+                                                ),
+                                              ),
+                                              Text(
+                                                Formatters.timeHms(ev.timestamp),
+                                                style: AppTheme.monoStyle.copyWith(
+                                                  fontSize: 11,
+                                                  color: context.textSecondary,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 5),
+                                          Text(
+                                            ev.summary,
+                                            style: TextStyle(
+                                                fontSize: 12, color: context.textSecondary),
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
+                                      ),
+                              ),
+                            );
+                          },
+                        ),
+                );
+
+                if (!showSidebar) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (counts.isNotEmpty) ...[
+                        SizedBox(
+                          height: 40,
+                          child: ListView(
+                            scrollDirection: Axis.horizontal,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: ChoiceChip(
+                                  label: Text('${s.t("All", "Tous")} (${c.events.length})'),
+                                  selected: _selectedDeviceKey == null,
+                                  onSelected: (_) => setState(() => _selectedDeviceKey = null),
+                                ),
+                              ),
+                              ...counts.entries.map((e) => Padding(
+                                    padding: const EdgeInsets.only(right: 8),
+                                    child: ChoiceChip(
+                                      label: Text('${e.value.name} (${e.value.count})'),
+                                      selected: _selectedDeviceKey == e.key,
+                                      onSelected: (_) =>
+                                          setState(() => _selectedDeviceKey = e.key),
+                                    ),
+                                  )),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                      Expanded(child: eventListCard),
+                    ],
+                  );
+                }
+
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SizedBox(
+                      width: 250,
+                      child: Card(
+                        clipBehavior: Clip.antiAlias,
+                        child: ListView(
+                          children: [
+                            ListTile(
+                              selected: _selectedDeviceKey == null,
+                              selectedTileColor: AppColors.orange.withValues(alpha: 0.12),
+                              leading: const Icon(Icons.all_inclusive_rounded, size: 18),
+                              title: Text(s.t('All Sources', 'Toutes les sources'),
+                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                              trailing: StatusPill(
+                                label: '${c.events.length}',
+                                color: AppColors.orange,
+                              ),
+                              onTap: () => setState(() => _selectedDeviceKey = null),
+                            ),
+                            Divider(height: 1, color: context.borderColor),
+                            ...counts.entries.map((e) => ListTile(
+                                  dense: true,
+                                  selected: _selectedDeviceKey == e.key,
+                                  selectedTileColor: AppColors.orange.withValues(alpha: 0.12),
+                                  title: Text(e.value.name,
+                                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500),
+                                      overflow: TextOverflow.ellipsis),
+                                  subtitle: Text(e.key,
+                                      style: AppTheme.monoStyle.copyWith(fontSize: 10.5)),
+                                  trailing: Text('${e.value.count}',
+                                      style: AppTheme.monoStyle.copyWith(fontSize: 11.5)),
+                                  onTap: () => setState(() => _selectedDeviceKey = e.key),
+                                )),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(child: eventListCard),
+                  ],
+                );
+              },
             ),
           ),
         ],

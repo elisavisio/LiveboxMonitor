@@ -100,134 +100,127 @@ class _DhcpScreenState extends State<DhcpScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // DHCPv4 Server Config
-              Expanded(
-                flex: 3,
-                child: SectionCard(
-                  title: s.t('DHCPv4 Server Configuration', 'Configuration du serveur DHCPv4'),
-                  icon: Icons.dns_rounded,
-                  actions: [
-                    Switch(
-                      value: _enabled,
-                      onChanged: (v) => setState(() => _enabled = v),
-                    ),
-                  ],
-                  child: Column(
+          ResponsiveRow(
+            leftFlex: 3,
+            rightFlex: 2,
+            breakpoint: 840,
+            // DHCPv4 Server Config
+            left: SectionCard(
+              title: s.t('DHCPv4 Server Configuration', 'Configuration du serveur DHCPv4'),
+              icon: Icons.dns_rounded,
+              actions: [
+                Switch(
+                  value: _enabled,
+                  onChanged: (v) => setState(() => _enabled = v),
+                ),
+              ],
+              child: Column(
+                children: [
+                  Row(
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _lanCtrl,
-                              decoration: InputDecoration(
-                                labelText: s.t('Livebox LAN IP', 'IP LAN Livebox'),
-                              ),
-                            ),
+                      Expanded(
+                        child: TextField(
+                          controller: _lanCtrl,
+                          decoration: InputDecoration(
+                            labelText: s.t('Livebox LAN IP', 'IP LAN Livebox'),
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: TextField(
-                              controller: _maskCtrl,
-                              decoration: InputDecoration(
-                                labelText: s.t('Subnet Mask', 'Masque sous-réseau'),
-                              ),
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _minCtrl,
-                              decoration: InputDecoration(
-                                labelText: s.t('Pool Start IP', 'Début de plage'),
-                              ),
-                            ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextField(
+                          controller: _maskCtrl,
+                          decoration: InputDecoration(
+                            labelText: s.t('Subnet Mask', 'Masque sous-réseau'),
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: TextField(
-                              controller: _maxCtrl,
-                              decoration: InputDecoration(
-                                labelText: s.t('Pool End IP', 'Fin de plage'),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: FilledButton.icon(
-                          onPressed: cfg == null
-                              ? null
-                              : () async {
-                                  await c.saveDhcpConfig(cfg.copyWith(
-                                    enabled: _enabled,
-                                    lanIp: _lanCtrl.text.trim(),
-                                    subnetMask: _maskCtrl.text.trim(),
-                                    minAddress: _minCtrl.text.trim(),
-                                    maxAddress: _maxCtrl.text.trim(),
-                                  ));
-                                  if (context.mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(s.t('DHCP settings saved', 'Configuration DHCP enregistrée')),
-                                      ),
-                                    );
-                                  }
-                                },
-                          icon: const Icon(Icons.save_outlined, size: 16),
-                          label: Text(s.apply),
                         ),
                       ),
                     ],
                   ),
-                ),
-              ),
-              const SizedBox(width: 16),
-              // DHCPv6 Info Card
-              Expanded(
-                flex: 2,
-                child: SectionCard(
-                  title: 'DHCPv6 & Prefix Delegation',
-                  icon: Icons.hub_rounded,
-                  iconColor: AppColors.info,
-                  child: cfg == null
-                      ? const SizedBox.shrink()
-                      : Column(
-                          children: [
-                            InfoRow(
-                              label: 'DHCPv6 Server',
-                              value: cfg.dhcpv6Enabled ? s.enabled : s.disabled,
-                              valueColor: cfg.dhcpv6Enabled ? AppColors.success : AppColors.warning,
-                            ),
-                            InfoRow(
-                              label: 'Delegated Prefix',
-                              value: cfg.ipv6Prefix,
-                              mono: true,
-                              copyable: true,
-                            ),
-                            InfoRow(
-                              label: s.t('Lease Duration', 'Durée du bail'),
-                              value: Formatters.duration(cfg.leaseTimeSeconds),
-                              mono: true,
-                            ),
-                            InfoRow(
-                              label: s.t('Static Bindings', 'Baux fixes'),
-                              value: '${c.dhcpBindings.where((b) => b.isStatic).length} / ${c.dhcpBindings.length}',
-                              mono: true,
-                            ),
-                          ],
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _minCtrl,
+                          decoration: InputDecoration(
+                            labelText: s.t('Pool Start IP', 'Début de plage'),
+                          ),
                         ),
-                ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextField(
+                          controller: _maxCtrl,
+                          decoration: InputDecoration(
+                            labelText: s.t('Pool End IP', 'Fin de plage'),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton.icon(
+                      onPressed: cfg == null
+                          ? null
+                          : () async {
+                              await c.saveDhcpConfig(cfg.copyWith(
+                                enabled: _enabled,
+                                lanIp: _lanCtrl.text.trim(),
+                                subnetMask: _maskCtrl.text.trim(),
+                                minAddress: _minCtrl.text.trim(),
+                                maxAddress: _maxCtrl.text.trim(),
+                              ));
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(s.t('DHCP settings saved', 'Configuration DHCP enregistrée')),
+                                  ),
+                                );
+                              }
+                            },
+                      icon: const Icon(Icons.save_outlined, size: 16),
+                      label: Text(s.apply),
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
+            // DHCPv6 Info Card
+            right: SectionCard(
+              title: 'DHCPv6 & Prefix Delegation',
+              icon: Icons.hub_rounded,
+              iconColor: AppColors.info,
+              child: cfg == null
+                  ? const SizedBox.shrink()
+                  : Column(
+                      children: [
+                        InfoRow(
+                          label: 'DHCPv6 Server',
+                          value: cfg.dhcpv6Enabled ? s.enabled : s.disabled,
+                          valueColor: cfg.dhcpv6Enabled ? AppColors.success : AppColors.warning,
+                        ),
+                        InfoRow(
+                          label: 'Delegated Prefix',
+                          value: cfg.ipv6Prefix,
+                          mono: true,
+                          copyable: true,
+                        ),
+                        InfoRow(
+                          label: s.t('Lease Duration', 'Durée du bail'),
+                          value: Formatters.duration(cfg.leaseTimeSeconds),
+                          mono: true,
+                        ),
+                        InfoRow(
+                          label: s.t('Static Bindings', 'Baux fixes'),
+                          value: '${c.dhcpBindings.where((b) => b.isStatic).length} / ${c.dhcpBindings.length}',
+                          mono: true,
+                        ),
+                      ],
+                    ),
+            ),
           ),
           const SizedBox(height: 18),
 

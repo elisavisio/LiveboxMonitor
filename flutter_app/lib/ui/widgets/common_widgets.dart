@@ -435,3 +435,51 @@ Future<bool> showConfirmDialog(
   );
   return res ?? false;
 }
+
+/// Renders two widgets side-by-side on wide screens (Desktop / iPad Landscape)
+/// and stacked vertically on narrower viewports (iPad Portrait / Split View).
+class ResponsiveRow extends StatelessWidget {
+  final Widget left;
+  final Widget right;
+  final int leftFlex;
+  final int rightFlex;
+  final double breakpoint;
+  final double spacing;
+
+  const ResponsiveRow({
+    super.key,
+    required this.left,
+    required this.right,
+    this.leftFlex = 1,
+    this.rightFlex = 1,
+    this.breakpoint = 820,
+    this.spacing = 16,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth >= breakpoint) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(flex: leftFlex, child: left),
+              SizedBox(width: spacing),
+              Expanded(flex: rightFlex, child: right),
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            left,
+            SizedBox(height: spacing),
+            right,
+          ],
+        );
+      },
+    );
+  }
+}
+

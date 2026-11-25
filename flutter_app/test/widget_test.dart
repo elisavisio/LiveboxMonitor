@@ -130,5 +130,89 @@ void main() {
       await controller.disconnect();
       await tester.pump();
     });
+
+    testWidgets('iPad Portrait (820x1180) renders all 11 tabs and device inspector sheet cleanly',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(820, 1180);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final controller = AppController();
+      await controller.initialize();
+      await tester.pumpWidget(LiveboxMonitorApp(controller: controller));
+      await tester.pumpAndSettle();
+
+      // Launch Demo Mode
+      await tester.tap(find.textContaining('Launch Interactive Demo Mode'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.takeException(), isNull);
+
+      // Sidebar auto-collapses to compact rail on iPad Portrait -> navigate via Tooltip/Icons
+      final navIcons = [
+        Icons.devices_rounded,
+        Icons.show_chart_rounded,
+        Icons.notifications_active_outlined,
+        Icons.dns_outlined,
+        Icons.alt_route_rounded,
+        Icons.shield_outlined,
+        Icons.phone_in_talk_outlined,
+        Icons.wifi_tethering_rounded,
+        Icons.tv_rounded,
+        Icons.tune_rounded,
+      ];
+
+      for (final icon in navIcons) {
+        final item = find.byIcon(icon).first;
+        await tester.ensureVisible(item);
+        await tester.tap(item);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
+        expect(tester.takeException(), isNull, reason: 'No exception on iPad Portrait tab $icon');
+      }
+
+      // Tap back to Devices and open the modal Device Inspector bottom sheet
+      await tester.tap(find.byIcon(Icons.devices_rounded).first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.tap(find.text('MacBook Pro M4 Max').first);
+      await tester.pumpAndSettle();
+      expect(find.text('Wake-on-LAN'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await controller.disconnect();
+      await tester.pump();
+    });
+
+    testWidgets('iPad Split View (640x1024) uses Drawer navigation with zero overflows',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(640, 1024);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final controller = AppController();
+      await controller.initialize();
+      await tester.pumpWidget(LiveboxMonitorApp(controller: controller));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.textContaining('Launch Interactive Demo Mode'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // Hamburger menu icon opens Drawer in Split View
+      expect(find.byIcon(Icons.menu_rounded), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.menu_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('TV Decoders'), findsOneWidget);
+      await tester.tap(find.text('TV Decoders'));
+      await tester.pumpAndSettle();
+      expect(find.text('ORANGE TV'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await controller.disconnect();
+      await tester.pump();
+    });
   });
 }

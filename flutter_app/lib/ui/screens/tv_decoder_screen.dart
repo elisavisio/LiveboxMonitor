@@ -66,13 +66,10 @@ class _TvDecoderScreenState extends State<TvDecoderScreen> {
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(22),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Left: Now Playing + Decoder Telemetry + Quick Channel Zap
-          Expanded(
-            flex: 3,
-            child: Column(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isWide = constraints.maxWidth >= 820;
+          final infoColumn = Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 // Now Playing Hero Banner
@@ -129,9 +126,12 @@ class _TvDecoderScreenState extends State<TvDecoderScreen> {
                                     showDot: true,
                                   ),
                                   const SizedBox(width: 10),
-                                  Text(
-                                    decoder.name,
-                                    style: TextStyle(fontSize: 12.5, color: context.textSecondary),
+                                  Flexible(
+                                    child: Text(
+                                      decoder.name,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(fontSize: 12.5, color: context.textSecondary),
+                                    ),
                                   ),
                                 ],
                               ),
@@ -199,12 +199,9 @@ class _TvDecoderScreenState extends State<TvDecoderScreen> {
                   ),
                 ),
               ],
-            ),
-          ),
-          const SizedBox(width: 20),
+            );
 
-          // Right: Sleek Virtual Remote Control
-          SizedBox(
+          final remoteWidget = SizedBox(
             width: 300,
             child: Card(
               child: Padding(
@@ -377,8 +374,28 @@ class _TvDecoderScreenState extends State<TvDecoderScreen> {
                 ),
               ),
             ),
-          ),
-        ],
+          );
+
+          if (isWide) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 3, child: infoColumn),
+                const SizedBox(width: 20),
+                remoteWidget,
+              ],
+            );
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              infoColumn,
+              const SizedBox(height: 20),
+              Center(child: remoteWidget),
+            ],
+          );
+        },
       ),
     );
   }

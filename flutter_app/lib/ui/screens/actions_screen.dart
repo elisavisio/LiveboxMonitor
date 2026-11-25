@@ -215,12 +215,11 @@ class _ActionsScreenState extends State<ActionsScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // Row 1: Wi-Fi Controls + Speed Test / AutoDiag
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                flex: 3,
-                child: SectionCard(
+          ResponsiveRow(
+            leftFlex: 3,
+            rightFlex: 2,
+            breakpoint: 840,
+            left: SectionCard(
                   title: s.t('Wi-Fi Radios & Scheduler', 'Réseaux Wi-Fi & Planificateur'),
                   icon: Icons.wifi_rounded,
                   child: Column(
@@ -269,274 +268,256 @@ class _ActionsScreenState extends State<ActionsScreen> {
                           )),
                     ],
                   ),
-                ),
               ),
-              const SizedBox(width: 16),
-
-              // Speed Test + LEDs / Screen
-              Expanded(
-                flex: 2,
-                child: Column(
-                  children: [
-                    SectionCard(
-                      title: s.t('Livebox Speed Test', 'Test de débit Livebox'),
-                      icon: Icons.speed_rounded,
-                      iconColor: AppColors.info,
-                      actions: [
-                        FilledButton.icon(
-                          onPressed: _runningSpeedTest
-                              ? null
-                              : () async {
-                                  setState(() => _runningSpeedTest = true);
-                                  await c.runSpeedTest();
-                                  if (mounted) setState(() => _runningSpeedTest = false);
-                                },
-                          icon: _runningSpeedTest
-                              ? const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                                )
-                              : const Icon(Icons.play_arrow_rounded, size: 16),
-                          label: Text(_runningSpeedTest
-                              ? s.t('Testing...', 'Test en cours...')
-                              : s.t('Run Test', 'Lancer')),
-                        ),
-                      ],
-                      child: c.lastSpeedTest == null
-                          ? Text(
-                              s.t(
-                                'Run an AutoDiag WAN speed test directly on the Livebox fiber interface.',
-                                'Lancez un test de débit WAN AutoDiag directement sur la Fibre Livebox.',
-                              ),
-                              style: TextStyle(fontSize: 12.5, color: context.textSecondary),
+            right: Column(
+              children: [
+                SectionCard(
+                  title: s.t('Livebox Speed Test', 'Test de débit Livebox'),
+                  icon: Icons.speed_rounded,
+                  iconColor: AppColors.info,
+                  actions: [
+                    FilledButton.icon(
+                      onPressed: _runningSpeedTest
+                          ? null
+                          : () async {
+                              setState(() => _runningSpeedTest = true);
+                              await c.runSpeedTest();
+                              if (mounted) setState(() => _runningSpeedTest = false);
+                            },
+                      icon: _runningSpeedTest
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                             )
-                          : Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceAround,
-                              children: [
-                                _SpeedMetric(
-                                  label: 'Download',
-                                  value: '${c.lastSpeedTest!.downloadMbps.toStringAsFixed(0)} Mbps',
-                                  color: AppColors.info,
-                                ),
-                                _SpeedMetric(
-                                  label: 'Upload',
-                                  value: '${c.lastSpeedTest!.uploadMbps.toStringAsFixed(0)} Mbps',
-                                  color: AppColors.purple,
-                                ),
-                                _SpeedMetric(
-                                  label: 'Ping',
-                                  value: '${c.lastSpeedTest!.pingMs.toStringAsFixed(1)} ms',
-                                  color: AppColors.success,
-                                ),
-                              ],
-                            ),
-                    ),
-                    const SizedBox(height: 16),
-                    SectionCard(
-                      title: s.t('LEDs & Front Display', 'LEDs & Écran Livebox'),
-                      icon: Icons.light_mode_outlined,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Text(s.t('Orange LED Brightness', 'Luminosité LED Orange'),
-                                  style: const TextStyle(fontSize: 13)),
-                              const Spacer(),
-                              Text('${((info.orangeLedLevel / 255) * 100).round()}%',
-                                  style: AppTheme.monoStyle.copyWith(fontSize: 12)),
-                            ],
-                          ),
-                          Slider(
-                            value: info.orangeLedLevel.toDouble().clamp(0, 255),
-                            min: 0,
-                            max: 255,
-                            activeColor: AppColors.orange,
-                            onChanged: (v) => c.setLedBrightness(v.round()),
-                          ),
-                          SwitchListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(
-                              s.t('Show Wi-Fi Password on Screen', 'Afficher le mot de passe Wi-Fi'),
-                              style: const TextStyle(fontSize: 13),
-                            ),
-                            value: info.showWifiPasswordOnScreen,
-                            onChanged: c.setShowWifiPasswordOnScreen,
-                          ),
-                        ],
-                      ),
+                          : const Icon(Icons.play_arrow_rounded, size: 16),
+                      label: Text(_runningSpeedTest
+                          ? s.t('Testing...', 'Test en cours...')
+                          : s.t('Run Test', 'Lancer')),
                     ),
                   ],
+                  child: c.lastSpeedTest == null
+                      ? Text(
+                          s.t(
+                            'Run an AutoDiag WAN speed test directly on the Livebox fiber interface.',
+                            'Lancez un test de débit WAN AutoDiag directement sur la Fibre Livebox.',
+                          ),
+                          style: TextStyle(fontSize: 12.5, color: context.textSecondary),
+                        )
+                      : Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceAround,
+                          children: [
+                            _SpeedMetric(
+                              label: 'Download',
+                              value: '${c.lastSpeedTest!.downloadMbps.toStringAsFixed(0)} Mbps',
+                              color: AppColors.info,
+                            ),
+                            _SpeedMetric(
+                              label: 'Upload',
+                              value: '${c.lastSpeedTest!.uploadMbps.toStringAsFixed(0)} Mbps',
+                              color: AppColors.purple,
+                            ),
+                            _SpeedMetric(
+                              label: 'Ping',
+                              value: '${c.lastSpeedTest!.pingMs.toStringAsFixed(1)} ms',
+                              color: AppColors.success,
+                            ),
+                          ],
+                        ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 16),
+                SectionCard(
+                  title: s.t('LEDs & Front Display', 'LEDs & Écran Livebox'),
+                  icon: Icons.light_mode_outlined,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(s.t('Orange LED Brightness', 'Luminosité LED Orange'),
+                              style: const TextStyle(fontSize: 13)),
+                          const Spacer(),
+                          Text('${((info.orangeLedLevel / 255) * 100).round()}%',
+                              style: AppTheme.monoStyle.copyWith(fontSize: 12)),
+                        ],
+                      ),
+                      Slider(
+                        value: info.orangeLedLevel.toDouble().clamp(0, 255),
+                        min: 0,
+                        max: 255,
+                        activeColor: AppColors.orange,
+                        onChanged: (v) => c.setLedBrightness(v.round()),
+                      ),
+                      SwitchListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          s.t('Show Wi-Fi Password on Screen', 'Afficher le mot de passe Wi-Fi'),
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                        value: info.showWifiPasswordOnScreen,
+                        onChanged: c.setShowWifiPasswordOnScreen,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 18),
 
           // Row 2: System (Reboot + Backup/Restore) + DynDNS + Static Routes
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Reboot & Cloud Backup
-              Expanded(
-                child: SectionCard(
-                  title: s.t('System, Reboot & Cloud Backup', 'Système, Redémarrage & Sauvegarde'),
-                  icon: Icons.power_settings_new_rounded,
-                  iconColor: AppColors.danger,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+          ResponsiveRow(
+            breakpoint: 840,
+            left: SectionCard(
+              title: s.t('System, Reboot & Cloud Backup', 'Système, Redémarrage & Sauvegarde'),
+              icon: Icons.power_settings_new_rounded,
+              iconColor: AppColors.danger,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
                     children: [
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: [
-                          FilledButton.icon(
-                            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
-                            onPressed: () async {
-                              final ok = await showConfirmDialog(
-                                context,
-                                title: s.t('Reboot Livebox', 'Redémarrer la Livebox'),
-                                message: s.t(
-                                  'This will temporarily disconnect Internet, TV, and Phone for ~2 minutes.',
-                                  'Cela coupera temporairement Internet, la TV et le téléphone (~2 minutes).',
-                                ),
-                                destructive: true,
-                              );
-                              if (ok) {
-                                await c.rebootLivebox();
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text(s.t('Reboot command sent', 'Redémarrage lancé'))),
-                                  );
-                                }
-                              }
-                            },
-                            icon: const Icon(Icons.restart_alt_rounded, size: 16),
-                            label: Text(s.t('Reboot Livebox', 'Redémarrer Livebox')),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed: () async {
-                              await c.triggerBackup();
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text(s.t('Cloud backup launched', 'Sauvegarde Cloud lancée'))),
-                                );
-                              }
-                            },
-                            icon: const Icon(Icons.cloud_upload_outlined, size: 16),
-                            label: Text(s.t('Cloud Backup', 'Sauvegarde Cloud')),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed: () async {
-                              final ok = await showConfirmDialog(
-                                context,
-                                title: s.t('Restore Cloud Backup', 'Restaurer la sauvegarde Cloud'),
-                                message: s.t(
-                                  'Restore last Orange Cloud config and reboot Livebox?',
-                                  'Restaurer la dernière configuration Cloud et redémarrer ?',
-                                ),
-                                destructive: true,
-                              );
-                              if (ok) await c.triggerRestore();
-                            },
-                            icon: const Icon(Icons.cloud_download_outlined, size: 16),
-                            label: Text(s.t('Restore', 'Restaurer')),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      Text(s.t('Recent Reboot History', 'Historique des redémarrages'),
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: context.textSecondary)),
-                      const SizedBox(height: 6),
-                      ...c.rebootHistory.take(4).map((r) => ListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.history_rounded, size: 17, color: AppColors.warning),
-                            title: Text(r.bootReason, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                            subtitle: Text(
-                              '${Formatters.dateTime(r.bootDate)} · ${r.shutdownReason}',
-                              style: AppTheme.monoStyle.copyWith(fontSize: 11, color: context.textSecondary),
+                      FilledButton.icon(
+                        style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+                        onPressed: () async {
+                          final ok = await showConfirmDialog(
+                            context,
+                            title: s.t('Reboot Livebox', 'Redémarrer la Livebox'),
+                            message: s.t(
+                              'This will temporarily disconnect Internet, TV, and Phone for ~2 minutes.',
+                              'Cela coupera temporairement Internet, la TV et le téléphone (~2 minutes).',
                             ),
-                          )),
+                            destructive: true,
+                          );
+                          if (ok) {
+                            await c.rebootLivebox();
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(s.t('Reboot command sent', 'Redémarrage lancé'))),
+                              );
+                            }
+                          }
+                        },
+                        icon: const Icon(Icons.restart_alt_rounded, size: 16),
+                        label: Text(s.t('Reboot Livebox', 'Redémarrer Livebox')),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          await c.triggerBackup();
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text(s.t('Cloud backup launched', 'Sauvegarde Cloud lancée'))),
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.cloud_upload_outlined, size: 16),
+                        label: Text(s.t('Cloud Backup', 'Sauvegarde Cloud')),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final ok = await showConfirmDialog(
+                            context,
+                            title: s.t('Restore Cloud Backup', 'Restaurer la sauvegarde Cloud'),
+                            message: s.t(
+                              'Restore last Orange Cloud config and reboot Livebox?',
+                              'Restaurer la dernière configuration Cloud et redémarrer ?',
+                            ),
+                            destructive: true,
+                          );
+                          if (ok) await c.triggerRestore();
+                        },
+                        icon: const Icon(Icons.cloud_download_outlined, size: 16),
+                        label: Text(s.t('Restore', 'Restaurer')),
+                      ),
                     ],
                   ),
-                ),
+                  const SizedBox(height: 14),
+                  Text(s.t('Recent Reboot History', 'Historique des redémarrages'),
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: context.textSecondary)),
+                  const SizedBox(height: 6),
+                  ...c.rebootHistory.take(4).map((r) => ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.history_rounded, size: 17, color: AppColors.warning),
+                        title: Text(r.bootReason, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                        subtitle: Text(
+                          '${Formatters.dateTime(r.bootDate)} · ${r.shutdownReason}',
+                          style: AppTheme.monoStyle.copyWith(fontSize: 11, color: context.textSecondary),
+                        ),
+                      )),
+                ],
               ),
-              const SizedBox(width: 16),
-
-              // DynDNS & Static Routes
-              Expanded(
-                child: Column(
-                  children: [
-                    SectionCard(
-                      title: 'DynDNS',
-                      icon: Icons.public_rounded,
-                      actions: [
-                        OutlinedButton.icon(
-                          onPressed: _showAddDynDnsDialog,
-                          icon: const Icon(Icons.add_rounded, size: 15),
-                          label: Text(s.add),
-                        ),
-                      ],
-                      child: c.dynDnsHosts.isEmpty
-                          ? Text(s.t('No DynDNS hosts configured.', 'Aucun hôte DynDNS.'),
-                              style: TextStyle(color: context.textSecondary))
-                          : Column(
-                              children: c.dynDnsHosts
-                                  .map((h) => ListTile(
-                                        dense: true,
-                                        contentPadding: EdgeInsets.zero,
-                                        title: Text(h.hostname,
-                                            style: AppTheme.monoStyle.copyWith(fontWeight: FontWeight.w600, fontSize: 13)),
-                                        subtitle: Text('${h.service} · ${h.username} · ${h.status}',
-                                            style: TextStyle(fontSize: 11.5, color: context.textSecondary)),
-                                        trailing: IconButton(
-                                          icon: const Icon(Icons.delete_outline_rounded,
-                                              size: 17, color: AppColors.danger),
-                                          onPressed: () => c.deleteDynDnsHost(h.hostname),
-                                        ),
-                                      ))
-                                  .toList(),
-                            ),
-                    ),
-                    const SizedBox(height: 16),
-                    SectionCard(
-                      title: s.t('Static IPv4 Routes', 'Routes statiques IPv4'),
-                      icon: Icons.fork_right_rounded,
-                      actions: [
-                        OutlinedButton.icon(
-                          onPressed: _showAddRouteDialog,
-                          icon: const Icon(Icons.add_rounded, size: 15),
-                          label: Text(s.add),
-                        ),
-                      ],
-                      child: c.staticRoutes.isEmpty
-                          ? Text(s.t('No static routes.', 'Aucune route statique.'),
-                              style: TextStyle(color: context.textSecondary))
-                          : Column(
-                              children: c.staticRoutes
-                                  .map((r) => ListTile(
-                                        dense: true,
-                                        contentPadding: EdgeInsets.zero,
-                                        title: Text('${r.destination}  →  ${r.gateway}',
-                                            style: AppTheme.monoStyle.copyWith(fontSize: 12.5, fontWeight: FontWeight.w600)),
-                                        subtitle: Text(r.interfaceName,
-                                            style: TextStyle(fontSize: 11.5, color: context.textSecondary)),
-                                        trailing: IconButton(
-                                          icon: const Icon(Icons.delete_outline_rounded,
-                                              size: 17, color: AppColors.danger),
-                                          onPressed: () => c.deleteStaticRoute(r.id),
-                                        ),
-                                      ))
-                                  .toList(),
-                            ),
+            ),
+            right: Column(
+              children: [
+                SectionCard(
+                  title: 'DynDNS',
+                  icon: Icons.public_rounded,
+                  actions: [
+                    OutlinedButton.icon(
+                      onPressed: _showAddDynDnsDialog,
+                      icon: const Icon(Icons.add_rounded, size: 15),
+                      label: Text(s.add),
                     ),
                   ],
+                  child: c.dynDnsHosts.isEmpty
+                      ? Text(s.t('No DynDNS hosts configured.', 'Aucun hôte DynDNS.'),
+                          style: TextStyle(color: context.textSecondary))
+                      : Column(
+                          children: c.dynDnsHosts
+                              .map((h) => ListTile(
+                                    dense: true,
+                                    contentPadding: EdgeInsets.zero,
+                                    title: Text(h.hostname,
+                                        style: AppTheme.monoStyle.copyWith(fontWeight: FontWeight.w600, fontSize: 13)),
+                                    subtitle: Text('${h.service} · ${h.username} · ${h.status}',
+                                        style: TextStyle(fontSize: 11.5, color: context.textSecondary)),
+                                    trailing: IconButton(
+                                      icon: const Icon(Icons.delete_outline_rounded,
+                                          size: 17, color: AppColors.danger),
+                                      onPressed: () => c.deleteDynDnsHost(h.hostname),
+                                    ),
+                                  ))
+                              .toList(),
+                        ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 16),
+                SectionCard(
+                  title: s.t('Static IPv4 Routes', 'Routes statiques IPv4'),
+                  icon: Icons.fork_right_rounded,
+                  actions: [
+                    OutlinedButton.icon(
+                      onPressed: _showAddRouteDialog,
+                      icon: const Icon(Icons.add_rounded, size: 15),
+                      label: Text(s.add),
+                    ),
+                  ],
+                  child: c.staticRoutes.isEmpty
+                      ? Text(s.t('No static routes.', 'Aucune route statique.'),
+                          style: TextStyle(color: context.textSecondary))
+                      : Column(
+                          children: c.staticRoutes
+                              .map((r) => ListTile(
+                                    dense: true,
+                                    contentPadding: EdgeInsets.zero,
+                                    title: Text('${r.destination}  →  ${r.gateway}',
+                                        style: AppTheme.monoStyle.copyWith(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                                    subtitle: Text(r.interfaceName,
+                                        style: TextStyle(fontSize: 11.5, color: context.textSecondary)),
+                                    trailing: IconButton(
+                                      icon: const Icon(Icons.delete_outline_rounded,
+                                          size: 17, color: AppColors.danger),
+                                      onPressed: () => c.deleteStaticRoute(r.id),
+                                    ),
+                                  ))
+                              .toList(),
+                        ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 18),
 
@@ -591,32 +572,32 @@ class _ActionsScreenState extends State<ActionsScreen> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                Row(
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Expanded(
-                      flex: 2,
+                    SizedBox(
+                      width: 200,
                       child: TextField(
                         controller: _serviceCtrl,
                         decoration: const InputDecoration(labelText: 'Service'),
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      flex: 2,
+                    SizedBox(
+                      width: 180,
                       child: TextField(
                         controller: _methodCtrl,
                         decoration: const InputDecoration(labelText: 'Method'),
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      flex: 3,
+                    SizedBox(
+                      width: 240,
                       child: TextField(
                         controller: _paramsCtrl,
                         decoration: const InputDecoration(labelText: 'Parameters (JSON)'),
                       ),
                     ),
-                    const SizedBox(width: 10),
                     FilledButton.icon(
                       onPressed: _callingApi ? null : _runRawApi,
                       icon: const Icon(Icons.send_rounded, size: 15),

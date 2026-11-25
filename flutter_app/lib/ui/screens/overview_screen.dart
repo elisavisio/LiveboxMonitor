@@ -119,12 +119,11 @@ class OverviewScreen extends StatelessWidget {
           const SizedBox(height: 18),
 
           // Live Mini Traffic Sparkline + Quick Services
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                flex: 3,
-                child: SectionCard(
+          ResponsiveRow(
+            leftFlex: 3,
+            rightFlex: 2,
+            breakpoint: 840,
+            left: SectionCard(
                   title: s.t('WAN Live Traffic', 'Trafic WAN en direct'),
                   subtitle: s.t(
                     'Download (Blue) & Upload (Purple) · Mbps',
@@ -216,13 +215,9 @@ class OverviewScreen extends StatelessWidget {
                             ),
                             duration: const Duration(milliseconds: 220),
                           ),
-                  ),
-                ),
               ),
-              const SizedBox(width: 16),
-              Expanded(
-                flex: 2,
-                child: SectionCard(
+            ),
+            right: SectionCard(
                   title: s.t('Active Services', 'Services actifs'),
                   subtitle: info.modelName,
                   icon: Icons.widgets_rounded,
@@ -281,17 +276,13 @@ class OverviewScreen extends StatelessWidget {
                     ],
                   ),
                 ),
-              ),
-            ],
           ),
           const SizedBox(height: 18),
 
           // System, WAN/LAN, and Fiber ONT Details
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: SectionCard(
+          ResponsiveRow(
+            breakpoint: 840,
+            left: SectionCard(
                   title: s.t('Livebox Hardware & Firmware', 'Matériel & Firmware Livebox'),
                   icon: Icons.router_rounded,
                   child: Column(
@@ -329,10 +320,7 @@ class OverviewScreen extends StatelessWidget {
                     ],
                   ),
                 ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: SectionCard(
+            right: SectionCard(
                   title: s.t('WAN, IPv6 & Fiber ONT', 'WAN, IPv6 & Optique ONT'),
                   icon: Icons.settings_ethernet_rounded,
                   iconColor: AppColors.info,
@@ -370,8 +358,6 @@ class OverviewScreen extends StatelessWidget {
                     ],
                   ),
                 ),
-              ),
-            ],
           ),
           const SizedBox(height: 18),
 
