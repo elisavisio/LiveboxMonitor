@@ -136,6 +136,9 @@
     const ov = state.overview;
     if (!ov) return;
     const s = ov.stats || {};
+    if (ov.version && $('app-version')) {
+      $('app-version').textContent = `v${ov.version}`;
+    }
     $('header-subtitle').textContent = `${ov.liveboxModel || 'Livebox'} (${ov.liveboxIp || '—'}) · ${ov.statusMessage || ''}`;
     $('btn-sim-device').classList.toggle('hidden', !ov.demoMode);
 

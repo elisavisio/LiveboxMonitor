@@ -26,6 +26,8 @@ class _ByteCounter {
 /// - Maintains Livebox -> Repeaters -> Eth/Wi-Fi -> Devices topology tree.
 /// - Dispatches SMTP alerts whenever a new unknown device joins the network.
 class LiveboxMonitorService {
+  static const String appVersion = '1.1.0';
+
   static const List<String> demoSeedMacs = [
     'AA:BB:CC:10:00:01',
     'AA:BB:CC:10:00:02',
@@ -1097,6 +1099,7 @@ class LiveboxMonitorService {
   // ---------------------------------------------------------------------------
 
   Map<String, dynamic> _statusPayload() => {
+        'version': appVersion,
         'connected': _connected,
         'demoMode': _demoMode,
         'readOnlyEnforced': true,

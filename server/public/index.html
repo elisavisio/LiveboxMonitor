@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Livebox Monitor Server — Supervision Lecture Seule</title>
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -12,16 +15,13 @@
   <header class="topbar">
     <div class="brand">
       <div class="brand-logo" aria-hidden="true">
-        <svg viewBox="0 0 36 36" width="32" height="32">
-          <rect x="2" y="2" width="32" height="32" rx="9" fill="#FF7900" />
-          <path d="M10 24c0-4.4 3.6-8 8-8s8 3.6 8 8" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
-          <path d="M14 24c0-2.2 1.8-4 4-4s4 1.8 4 4" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
-          <circle cx="18" cy="24" r="2.2" fill="#fff"/>
-          <circle cx="18" cy="11" r="2.2" fill="#fff"/>
-        </svg>
+        <img src="/favicon.png" alt="Livebox Monitor" width="34" height="34" class="brand-img" />
       </div>
       <div>
-        <div class="brand-title">Livebox Monitor <span class="muted">Server</span></div>
+        <div class="brand-title">
+          Livebox Monitor <span class="muted">Server</span>
+          <span id="app-version" class="version-badge mono">v1.1.0</span>
+        </div>
         <div id="header-subtitle" class="brand-sub">Connexion en cours...</div>
       </div>
     </div>

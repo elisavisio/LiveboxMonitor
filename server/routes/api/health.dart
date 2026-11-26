@@ -6,6 +6,7 @@ Response onRequest(RequestContext context) {
   return Response.json(
     body: {
       'status': 'ok',
+      'version': LiveboxMonitorService.appVersion,
       'connected': service.isConnected,
       'demoMode': service.isDemoMode,
       'readOnlyEnforced': true,
