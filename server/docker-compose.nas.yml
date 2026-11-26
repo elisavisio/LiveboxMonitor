@@ -1,0 +1,35 @@
+# Docker Compose prêt à l'emploi pour NAS (Synology, QNAP, Unraid, Portainer, Raspberry Pi)
+# Utilise l'image pré-compilée multi-arch (amd64 + arm64) publiée sur GitHub Container Registry.
+#
+# Lancement sur le NAS :
+#   docker compose -f docker-compose.nas.yml up -d
+# Mise à jour :
+#   docker compose -f docker-compose.nas.yml pull && docker compose -f docker-compose.nas.yml up -d
+
+services:
+  livebox-monitor-server:
+    image: ghcr.io/elisavisio/livebox-monitor-server:latest
+    container_name: livebox-monitor-server
+    restart: unless-stopped
+    ports:
+      - "${LBM_PORT:-8090}:8080"
+    environment:
+      PORT: 8080
+      DATA_DIR: /data
+      TZ: Europe/Paris
+      # Optionnel : pré-configuration au 1er démarrage (sinon tout se règle dans l'IHM Web)
+      LIVEBOX_URL: ${LIVEBOX_URL:-http://192.168.1.1/}
+      LIVEBOX_USER: ${LIVEBOX_USER:-admin}
+      LIVEBOX_PASSWORD: ${LIVEBOX_PASSWORD:-}
+      DEMO_MODE: ${DEMO_MODE:-false}
+      DASHBOARD_URL: ${DASHBOARD_URL:-http://192.168.1.50:8090}
+      # Clé maître du coffre AES-256-GCM (laisser vide pour auto-génération dans /data/.master.key)
+      LBM_MASTER_KEY: ${LBM_MASTER_KEY:-}
+    volumes:
+      # Volume persistant pour la base SQLite + le coffre chiffré AES-256-GCM
+      # Sur NAS Synology/TrueNAS, vous pouvez aussi remplacer par un dossier local, ex. ./data:/data
+      - lbm_data:/data
+
+volumes:
+  lbm_data:
+    driver: local

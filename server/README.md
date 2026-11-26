@@ -17,7 +17,30 @@ Application serveur **strictement en lecture seule** pour superviser votre Liveb
     2. Variable d'environnement `LBM_MASTER_KEY`,
     3. Clé aléatoire 256 bits auto-générée et persistée dans `/data/.master.key` (`chmod 600`).
 
-## Démarrage rapide avec Docker Compose
+## Déploiement rapide sur NAS (image pré-compilée GHCR — amd64 & arm64)
+
+À chaque `push` sur `main`, GitHub Actions publie automatiquement l'image multi-architecture (`linux/amd64` + `linux/arm64`) sur :
+
+```text
+ghcr.io/elisavisio/livebox-monitor-server:latest
+```
+
+Sur votre NAS (Synology Container Manager, Portainer, Unraid, Raspberry Pi…), utilisez directement [`docker-compose.nas.yml`](./docker-compose.nas.yml) sans rien compiler :
+
+```bash
+docker compose -f docker-compose.nas.yml up -d
+```
+
+Pour mettre à jour vers la dernière version :
+
+```bash
+docker compose -f docker-compose.nas.yml pull
+docker compose -f docker-compose.nas.yml up -d
+```
+
+> Si votre dépôt GitHub est **privé**, pensez à rendre le package public dans GitHub (`Packages → livebox-monitor-server → Package settings → Change visibility`) ou à vous connecter sur le NAS avec `docker login ghcr.io`.
+
+## Démarrage rapide avec build local (Docker Compose)
 
 ```bash
 cd server
