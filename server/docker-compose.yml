@@ -1,0 +1,58 @@
+services:
+  livebox-monitor-server:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    container_name: livebox-monitor-server
+    restart: unless-stopped
+    ports:
+      - "${LBM_PORT:-8080}:8080"
+    environment:
+      PORT: 8080
+      DATA_DIR: /data
+      # Optionnel : pré-remplissage au 1er démarrage (sinon configurable via l'IHM Web et chiffré en AES-256-GCM)
+      LIVEBOX_URL: ${LIVEBOX_URL:-http://livebox.home/}
+      LIVEBOX_USER: ${LIVEBOX_USER:-admin}
+      LIVEBOX_PASSWORD: ${LIVEBOX_PASSWORD:-}
+      DEMO_MODE: ${DEMO_MODE:-false}
+      DASHBOARD_URL: ${DASHBOARD_URL:-http://localhost:8080}
+      # Clé maître du coffre AES-256-GCM (recommandé en production : utiliser Docker secret ci-dessous)
+      LBM_MASTER_KEY: ${LBM_MASTER_KEY:-}
+      # Optionnel : pré-configuration SMTP
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SSL: ${SMTP_SSL:-false}
+      SMTP_ALLOW_INSECURE: ${SMTP_ALLOW_INSECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_TO: ${SMTP_TO:-}
+    volumes:
+      - lbm_data:/data
+    # Décommentez pour injecter la clé maître via un Docker Secret en lecture seule :
+    # secrets:
+    #   - lbm_master_key
+    # Si votre hôte résout livebox.home sur le LAN local, ajoutez extra_hosts ou network_mode: host (Linux)
+    # extra_hosts:
+    #   - "livebox.home:192.168.1.1"
+
+  # Conteneur compagnon optionnel pour tester les alertes email localement :
+  #   docker compose --profile mail-test up -d --build
+  # Puis dans l'IHM Web (Configuration SMTP) : hôte=mailpit, port=1025, sans TLS.
+  # Webmail Mailpit accessible sur http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: livebox-monitor-mailpit
+    profiles: ["mail-test"]
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+volumes:
+  lbm_data:
+    driver: local
+
+# secrets:
+#   lbm_master_key:
+#     file: ./lbm_master_key.txt

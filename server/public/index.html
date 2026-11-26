@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="fr" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Livebox Monitor Server — Supervision Lecture Seule</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="toast-container" class="toast-container"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-logo" aria-hidden="true">
+        <svg viewBox="0 0 36 36" width="32" height="32">
+          <rect x="2" y="2" width="32" height="32" rx="9" fill="#FF7900" />
+          <path d="M10 24c0-4.4 3.6-8 8-8s8 3.6 8 8" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+          <path d="M14 24c0-2.2 1.8-4 4-4s4 1.8 4 4" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+          <circle cx="18" cy="24" r="2.2" fill="#fff"/>
+          <circle cx="18" cy="11" r="2.2" fill="#fff"/>
+        </svg>
+      </div>
+      <div>
+        <div class="brand-title">Livebox Monitor <span class="muted">Server</span></div>
+        <div id="header-subtitle" class="brand-sub">Connexion en cours...</div>
+      </div>
+    </div>
+
+    <div class="topbar-badges">
+      <span class="pill pill-readonly" title="Aucune API d'écriture Livebox n'est utilisée">
+        <span class="dot dot-green"></span> Lecture seule
+      </span>
+      <span id="sse-badge" class="pill pill-neutral">
+        <span class="dot dot-amber"></span> Connexion flux...
+      </span>
+      <button id="btn-sim-device" class="btn btn-accent btn-sm hidden" title="Simuler l'arrivée d'un nouvel appareil inconnu pour tester les alertes SSE et email">
+        + Simuler nouvel appareil
+      </button>
+      <button id="btn-theme" class="btn btn-ghost btn-sm" title="Changer de thème">☀️ Clair</button>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="topology" role="tab">🗺️ Carte &amp; Topologie</button>
+    <button class="tab" data-tab="devices" role="tab">💻 Équipements <span id="tab-unknown-badge" class="badge-count hidden">0</span></button>
+    <button class="tab" data-tab="graphs" role="tab">📈 Présence &amp; Bande passante</button>
+    <button class="tab" data-tab="events" role="tab">⚡ Événements temps réel</button>
+    <button class="tab" data-tab="config" role="tab">🔐 Configuration</button>
+  </nav>
+
+  <main class="container">
+    <!-- TAB 1: TOPOLOGY & MAP -->
+    <section id="tab-topology" class="tab-panel active">
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">Actifs (avec IP)</div>
+          <div id="kpi-active" class="kpi-value">—</div>
+          <div id="kpi-active-sub" class="kpi-sub">Wi-Fi / Ethernet</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Équipements Connus</div>
+          <div id="kpi-known" class="kpi-value text-green">—</div>
+          <div id="kpi-total-sub" class="kpi-sub">Total enregistrés</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Équipements Inconnus</div>
+          <div id="kpi-unknown" class="kpi-value text-amber">—</div>
+          <div id="kpi-unknown-sub" class="kpi-sub">À vérifier / taguer</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Débit instantané</div>
+          <div id="kpi-bandwidth" class="kpi-value mono">—</div>
+          <div id="kpi-bw-sub" class="kpi-sub">↓ Download · ↑ Upload</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Événements reçus</div>
+          <div id="kpi-events" class="kpi-value mono">—</div>
+          <div id="kpi-wan-sub" class="kpi-sub">WAN</div>
+        </div>
+      </div>
+
+      <div class="topology-layout">
+        <div class="card map-card">
+          <div class="card-header">
+            <div>
+              <h2>Carte visuelle des équipements</h2>
+              <p class="muted-sm">Cliquez sur un équipement pour afficher sa présence et sa bande passante</p>
+            </div>
+            <div class="legend">
+              <span><i class="leg-line leg-eth"></i> Ethernet</span>
+              <span><i class="leg-line leg-wifi6"></i> Wi-Fi 6 GHz</span>
+              <span><i class="leg-line leg-wifi5"></i> Wi-Fi 5 GHz</span>
+              <span><i class="leg-line leg-wifi24"></i> Wi-Fi 2.4 GHz</span>
+              <span><i class="leg-dot leg-unknown"></i> Inconnu</span>
+            </div>
+          </div>
+          <div class="svg-wrapper">
+            <svg id="topology-svg" class="topology-svg" viewBox="0 0 980 500" preserveAspectRatio="xMidYMid meet"></svg>
+          </div>
+        </div>
+
+        <div class="card tree-card">
+          <div class="card-header">
+            <div>
+              <h2>Arbre de connexion</h2>
+              <p class="muted-sm">Livebox → Répéteurs → Liens Eth / Wi-Fi → Équipements</p>
+            </div>
+            <button id="btn-refresh-topo" class="btn btn-ghost btn-sm">↻ Actualiser</button>
+          </div>
+          <div id="topology-tree" class="tree-container"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: DEVICES -->
+    <section id="tab-devices" class="tab-panel">
+      <div class="card">
+        <div class="toolbar">
+          <div class="filter-chips" id="device-filters">
+            <button class="chip active" data-filter="active_ip">Actifs (avec IP)</button>
+            <button class="chip" data-filter="all">Tous</button>
+            <button class="chip" data-filter="known">Connus</button>
+            <button class="chip" data-filter="unknown">Inconnus</button>
+            <button class="chip" data-filter="wifi">Wi-Fi</button>
+            <button class="chip" data-filter="eth">Ethernet</button>
+          </div>
+          <div class="toolbar-right">
+            <input type="search" id="device-search" class="input" placeholder="Rechercher nom, MAC, IP..." />
+            <select id="device-sort" class="input select">
+              <option value="name">Trier : Nom</option>
+              <option value="ip">Trier : IP</option>
+              <option value="id">Trier : ID / MAC</option>
+              <option value="bandwidth">Trier : Bande passante ↓</option>
+              <option value="trust">Trier : Inconnus d'abord</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>État</th>
+                <th>Équipement</th>
+                <th>IP &amp; MAC</th>
+                <th>Connexion</th>
+                <th>Débit (↓ / ↑)</th>
+                <th>Confiance</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="devices-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: PRESENCE & BANDWIDTH GRAPHS -->
+    <section id="tab-graphs" class="tab-panel">
+      <div class="card">
+        <div class="toolbar">
+          <div class="graph-device-picker">
+            <label for="graph-device-select" class="label-inline">Équipement :</label>
+            <select id="graph-device-select" class="input select select-wide"></select>
+            <button id="graph-toggle-trust" class="btn btn-sm btn-ghost">Taguer</button>
+          </div>
+          <div class="filter-chips" id="graph-range-chips">
+            <button class="chip" data-hours="1">1h</button>
+            <button class="chip" data-hours="6">6h</button>
+            <button class="chip active" data-hours="24">24h</button>
+            <button class="chip" data-hours="168">7j</button>
+          </div>
+        </div>
+
+        <div id="graph-device-meta" class="device-meta-bar"></div>
+
+        <div class="chart-section">
+          <div class="chart-header">
+            <div>
+              <h3>Graphe de présence</h3>
+              <p class="muted-sm">Historique des plages En ligne (vert) et Hors ligne (gris)</p>
+            </div>
+            <div id="presence-uptime-badge" class="pill pill-green">Disponibilité : —</div>
+          </div>
+          <div class="canvas-box canvas-box-sm">
+            <canvas id="presence-canvas"></canvas>
+            <div id="presence-tooltip" class="canvas-tooltip hidden"></div>
+          </div>
+        </div>
+
+        <div class="chart-section">
+          <div class="chart-header">
+            <div>
+              <h3>Graphe de bande passante</h3>
+              <p class="muted-sm">Débit descendant (cyan) et montant (orange) par équipement</p>
+            </div>
+            <div id="bw-summary-stats" class="bw-stats mono"></div>
+          </div>
+          <div class="canvas-box">
+            <canvas id="bandwidth-canvas"></canvas>
+            <div id="bandwidth-tooltip" class="canvas-tooltip hidden"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: LIVE EVENTS -->
+    <section id="tab-events" class="tab-panel">
+      <div class="card">
+        <div class="toolbar">
+          <div>
+            <h2>Flux d'événements Livebox</h2>
+            <p class="muted-sm">Écoute temps réel des événements <code>Devices.Device</code> et <code>HomeLan</code> (Server-Sent Events)</p>
+          </div>
+          <div class="toolbar-right">
+            <input type="search" id="event-search" class="input" placeholder="Filtrer par MAC, nom, raison..." />
+            <button id="btn-refresh-events" class="btn btn-ghost btn-sm">↻ Recharger</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Heure</th>
+                <th>Type</th>
+                <th>Équipement</th>
+                <th>Résumé</th>
+                <th>Détails</th>
+              </tr>
+            </thead>
+            <tbody id="events-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 5: CONFIGURATION -->
+    <section id="tab-config" class="tab-panel">
+      <div class="config-grid">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2>Connexion Livebox (Lecture seule)</h2>
+              <p class="muted-sm">Les identifiants sont chiffrés en AES-256-GCM sur le volume persistant <code>/data</code></p>
+            </div>
+            <span id="vault-badge" class="pill pill-green">🔒 AES-256-GCM</span>
+          </div>
+
+          <form id="livebox-form" class="form-stack">
+            <div class="form-row">
+              <label for="cfg-lb-url">URL de la Livebox</label>
+              <input id="cfg-lb-url" type="text" class="input" placeholder="http://livebox.home/" required />
+            </div>
+            <div class="form-row">
+              <label for="cfg-lb-user">Identifiant</label>
+              <input id="cfg-lb-user" type="text" class="input" value="admin" required />
+            </div>
+            <div class="form-row">
+              <label for="cfg-lb-pass">Mot de passe Livebox</label>
+              <input id="cfg-lb-pass" type="password" class="input" placeholder="Laisser vide pour conserver le mot de passe enregistré" autocomplete="new-password" />
+              <small id="cfg-lb-pass-hint" class="muted-sm"></small>
+            </div>
+            <label class="checkbox-row">
+              <input id="cfg-lb-demo" type="checkbox" />
+              <span>Activer le <strong>Mode Démo</strong> (simule une Livebox W7, 2 répéteurs et du trafic sans connexion réelle)</span>
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-accent">Enregistrer &amp; Reconnecter</button>
+              <span id="cfg-lb-msg" class="form-msg"></span>
+            </div>
+          </form>
+
+          <div class="info-box">
+            <strong>Garantie Lecture Seule :</strong> Ce serveur utilise <code>ReadOnlyLiveboxClient</code> avec une liste blanche stricte d'appels en lecture (<code>get</code>, <code>getWANStatus</code>, <code>getStationStats</code>, <code>buildTopology</code>, flux d'événements). Toute méthode de modification ou redémarrage est bloquée.
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2>Alertes Email (SMTP)</h2>
+              <p class="muted-sm">Envoie un email automatique lorsqu'un nouvel équipement inconnu apparaît</p>
+            </div>
+          </div>
+
+          <form id="smtp-form" class="form-stack">
+            <label class="checkbox-row">
+              <input id="cfg-smtp-enabled" type="checkbox" />
+              <span>Activer les notifications email pour les nouveaux équipements</span>
+            </label>
+            <div class="form-two">
+              <div class="form-row">
+                <label for="cfg-smtp-host">Serveur SMTP</label>
+                <input id="cfg-smtp-host" type="text" class="input" placeholder="smtp.gmail.com ou mailpit" />
+              </div>
+              <div class="form-row">
+                <label for="cfg-smtp-port">Port</label>
+                <input id="cfg-smtp-port" type="number" class="input" value="587" />
+              </div>
+            </div>
+            <div class="form-two">
+              <div class="form-row">
+                <label for="cfg-smtp-user">Utilisateur SMTP</label>
+                <input id="cfg-smtp-user" type="text" class="input" placeholder="Optionnel pour relais local" />
+              </div>
+              <div class="form-row">
+                <label for="cfg-smtp-pass">Mot de passe SMTP</label>
+                <input id="cfg-smtp-pass" type="password" class="input" placeholder="Laisser vide pour conserver" autocomplete="new-password" />
+              </div>
+            </div>
+            <div class="form-two">
+              <div class="form-row">
+                <label for="cfg-smtp-from">Adresse expéditeur (From)</label>
+                <input id="cfg-smtp-from" type="email" class="input" placeholder="livebox-monitor@domaine.fr" />
+              </div>
+              <div class="form-row">
+                <label for="cfg-smtp-to">Destinataire(s) (séparés par virgule)</label>
+                <input id="cfg-smtp-to" type="text" class="input" placeholder="vous@domaine.fr" />
+              </div>
+            </div>
+            <div class="checkbox-group">
+              <label class="checkbox-row">
+                <input id="cfg-smtp-ssl" type="checkbox" />
+                <span>SSL/TLS implicite (port 465)</span>
+              </label>
+              <label class="checkbox-row">
+                <input id="cfg-smtp-insecure" type="checkbox" />
+                <span>Autoriser sans TLS / certificat auto-signé (ex. Mailpit local)</span>
+              </label>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-accent">Enregistrer SMTP</button>
+              <button type="button" id="btn-smtp-test" class="btn btn-ghost">✉️ Envoyer un email de test</button>
+              <span id="cfg-smtp-msg" class="form-msg"></span>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Modal for JSON payload or note edit -->
+  <div id="modal-backdrop" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="modal-title">Détails</h3>
+        <button id="modal-close" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

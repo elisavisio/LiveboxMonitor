@@ -182,7 +182,10 @@ cython_debug/
 #.idea/
 Pipfile.lock
 
-# Flutter desktop app exceptions (override Python lib/ and *.manifest rules above)
+# Flutter desktop app & Dart Frog server exceptions (override Python lib/ and *.manifest rules above)
 !flutter_app/lib/
 !flutter_app/windows/runner/runner.exe.manifest
+!packages/livebox_client/lib/
+!server/lib/
+
 
