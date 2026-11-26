@@ -392,5 +392,112 @@ void main() {
       expect(remaining.length, equals(1));
       expect(remaining.first['mac'], equals(realMac));
     });
+
+    test('parses real Livebox data-wrapped Statistics, changed, and HomeLan events',
+        () async {
+      await service.updateLiveboxConfig(
+        url: 'http://192.168.1.1/',
+        username: 'admin',
+        password: '',
+        demoMode: false,
+      );
+
+      const mac = 'AA:11:22:33:44:55';
+      service.db.upsertDevice(
+        ServerDevice(
+          mac: mac,
+          name: 'PC-Bureau',
+          vendor: 'Apple',
+          deviceType: 'Computer',
+          ipAddress: '192.168.1.40',
+          active: true,
+          linkType: 'eth',
+          interfaceName: 'Ethernet ETH1',
+          firstSeenMs: 1700000000000,
+          lastSeenMs: 1700000000000,
+          lastChangedMs: 1700000000000,
+        ),
+      );
+
+      final t1 = DateTime.now().subtract(const Duration(seconds: 5)).toUtc().toIso8601String();
+      final t2 = DateTime.now().toUtc().toIso8601String();
+
+      // 1st Statistics event (baseline) wrapped in `data` like real Orange Livebox
+      await service.processLiveboxEvent({
+        'data': {
+          'handler': 'Devices.Device.$mac',
+          'object': {
+            'reason': 'Statistics',
+            'attributes': {
+              mac.toLowerCase(): {
+                'RxBytes': 1000000,
+                'TxBytes': 200000,
+                'Timestamp': t1,
+              },
+            },
+          },
+        },
+      });
+
+      // 2nd Statistics event 5s later (+500 KB Rx, +100 KB Tx => ~100 KB/s Rx, ~20 KB/s Tx)
+      await service.processLiveboxEvent({
+        'data': {
+          'handler': 'Devices.Device.$mac',
+          'object': {
+            'reason': 'Statistics',
+            'attributes': {
+              mac: {
+                'RxBytes': 1500000,
+                'TxBytes': 300000,
+                'Timestamp': t2,
+              },
+            },
+          },
+        },
+      });
+
+      final updated = service.db.getDevice(mac)!;
+      expect(updated.rxBytesPerSec, greaterThan(50000));
+      expect(updated.txBytesPerSec, greaterThan(10000));
+      final stats = service.getOverview()['stats'] as Map;
+      expect(stats['totalRxBytesPerSec'] as num, greaterThan(50000));
+
+      // Real Livebox HomeLan interface event wrapped in `data`
+      await service.processLiveboxEvent({
+        'data': {
+          'handler': 'HomeLan.Interface.eth0.Stats',
+          'object': {
+            'reason': 'changed',
+            'attributes': {
+              'BytesReceived': 999999,
+              'BytesSent': 111111,
+            },
+          },
+        },
+      });
+
+      // Real Livebox device_updated event with nested MAC attributes
+      await service.processLiveboxEvent({
+        'data': {
+          'handler': 'Devices.Device.$mac',
+          'object': {
+            'reason': 'device_updated',
+            'attributes': {
+              mac: {
+                'Name': 'Mac-Studio-ETH',
+                'IPAddress': '192.168.1.40',
+                'Active': true,
+              },
+            },
+          },
+        },
+      });
+
+      expect(service.db.getDevice(mac)!.name, equals('Mac-Studio-ETH'));
+      final events = service.listEventsJson();
+      expect(events.any((e) => e['reason'] == 'Statistics'), isTrue);
+      expect(events.any((e) => e['reason'] == 'HomeLan'), isTrue);
+      expect(events.any((e) => e['reason'] == 'device_updated'), isTrue);
+    });
   });
 }

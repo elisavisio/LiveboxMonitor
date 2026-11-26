@@ -354,11 +354,17 @@ class LiveboxSession {
         body: jsonEncode(payload),
         headers: _eventHeaders,
         timeout: timeout,
+        maxAttempts: 1,
       );
       if (raw.endsWith('null')) {
         raw = raw.substring(0, raw.length - 4);
       }
-      if (raw.trim().isEmpty) return null;
+      if (raw.trim().isEmpty) {
+        return <String, dynamic>{
+          'channelid': _channelId,
+          'events': const <dynamic>[],
+        };
+      }
       var decoded = jsonDecode(raw);
       if (decoded is Map<String, dynamic>) {
         if (decoded['result'] is Map<String, dynamic>) {
@@ -374,7 +380,16 @@ class LiveboxSession {
         if (ch is int) _channelId = ch;
         return decoded;
       }
-    } catch (_) {}
+    } on TimeoutException {
+      // Normal when no Livebox event occurs within the long-poll window
+      return <String, dynamic>{
+        'channelid': _channelId,
+        'events': const <dynamic>[],
+        'timeout': true,
+      };
+    } catch (e) {
+      _log('eventRequest error: $e');
+    }
     return null;
   }
 
@@ -399,9 +414,10 @@ class LiveboxSession {
     required Map<String, String> headers,
     required Duration timeout,
     String? logStep,
+    int maxAttempts = 2,
   }) {
     return _withThrottle(() async {
-      for (int attempt = 0; attempt < 2; attempt++) {
+      for (int attempt = 0; attempt < maxAttempts; attempt++) {
         try {
           final client = _client ?? _createClient();
           final uri = Uri.parse(url);

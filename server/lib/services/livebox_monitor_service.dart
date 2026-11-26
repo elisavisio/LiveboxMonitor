@@ -26,7 +26,10 @@ class _ByteCounter {
 /// - Maintains Livebox -> Repeaters -> Eth/Wi-Fi -> Devices topology tree.
 /// - Dispatches SMTP alerts whenever a new unknown device joins the network.
 class LiveboxMonitorService {
-  static const String appVersion = '1.1.0';
+  static const String appVersion = '1.1.1';
+
+  static final RegExp _macPattern =
+      RegExp(r'([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})');
 
   static const List<String> demoSeedMacs = [
     'AA:BB:CC:10:00:01',
@@ -73,6 +76,7 @@ class LiveboxMonitorService {
   LiveboxTopologyNode? _cachedTopology;
   final List<String> _wifiIntfKeys = <String>[];
   final Map<String, _ByteCounter> _prevCounters = <String, _ByteCounter>{};
+  final Map<String, int> _lastStatEventLogMs = <String, int>{};
   final Set<String> _notifiedMacs = <String>{};
 
   int _loopEpoch = 0;
@@ -192,6 +196,7 @@ class LiveboxMonitorService {
     _wanIp = '';
     _eventsReceived = 0;
     _prevCounters.clear();
+    _lastStatEventLogMs.clear();
     _wifiIntfKeys.clear();
     _notifiedMacs.clear();
     if (_demoDb != null) {
@@ -370,20 +375,35 @@ class LiveboxMonitorService {
     } catch (_) {}
 
     try {
-      final intfs = await client.getHomeLanInterfaces();
+      final vapKeys = await client.getWifiVapInterfaceKeys();
       _wifiIntfKeys.clear();
-      for (final entry in intfs.entries) {
-        final key = entry.key;
-        final lower = key.toLowerCase();
-        if (lower.startsWith('wl') ||
-            lower.contains('vap') ||
-            lower.contains('wifi')) {
-          _wifiIntfKeys.add(key);
+      if (vapKeys.isNotEmpty) {
+        _wifiIntfKeys.addAll(vapKeys);
+      } else {
+        final intfs = await client.getHomeLanInterfaces();
+        for (final entry in intfs.entries) {
+          final key = entry.key;
+          final lower = key.toLowerCase();
+          if (lower.startsWith('wl') ||
+              lower.contains('vap') ||
+              lower.contains('wifi')) {
+            _wifiIntfKeys.add(key);
+          }
         }
       }
       if (_wifiIntfKeys.isEmpty) {
-        _wifiIntfKeys.addAll(const ['wl0', 'eth6', 'wl1']);
+        _wifiIntfKeys.addAll(const [
+          'vap2g0priv',
+          'vap5g0priv',
+          'vap6g0priv',
+          'wl0',
+          'eth6',
+          'wl1',
+        ]);
       }
+      stdout.writeln(
+        '[LiveboxMonitorServer] Wi-Fi VAP interfaces for stats: ${_wifiIntfKeys.join(", ")}',
+      );
     } catch (_) {}
 
     // Topology first so we can map parent repeater MACs
@@ -415,6 +435,25 @@ class LiveboxMonitorService {
     if (_cachedTopology == null) {
       _cachedTopology = _buildFallbackTopologyFromDb();
     }
+
+    // Take an immediate baseline Wi-Fi station counter sample so the very first
+    // 5s timer tick immediately computes real Rx/Tx rates.
+    await _pollWifiStationStats(client, _loopEpoch);
+
+    final connEv = db.insertEvent(
+      deviceMac: _liveboxMac,
+      deviceName: _liveboxModel,
+      reason: 'connected',
+      summary:
+          'Connecté en lecture seule (${db.listDevices().length} équipements, ${_wifiIntfKeys.length} interfaces Wi-Fi)',
+      rawJson: jsonEncode({
+        'model': _liveboxModel,
+        'ip': _liveboxIp,
+        'wifiVaps': _wifiIntfKeys,
+      }),
+      tsMs: nowMs,
+    );
+    _broadcast('event', connEv.toJson());
   }
 
   void _extractParentMap(
@@ -481,10 +520,20 @@ class LiveboxMonitorService {
     );
   }
 
-  Future<void> _handleLiveboxEvent(Map<String, dynamic> event) async {
+  Future<void> _handleLiveboxEvent(Map<String, dynamic> event) =>
+      processLiveboxEvent(event);
+
+  /// Parses and processes a single raw Livebox event from `eventRequest`.
+  ///
+  /// Real Orange Livebox payloads wrap `{handler, object}` inside `event['data']`.
+  /// Supports both wrapped (`{data: {handler, object}}`) and direct envelopes.
+  Future<void> processLiveboxEvent(Map<String, dynamic> event) async {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final handler = event['handler']?.toString() ?? '';
-    final obj = event['object'];
+    final data = event['data'] is Map
+        ? Map<String, dynamic>.from(event['data'] as Map)
+        : event;
+    final handler = data['handler']?.toString() ?? '';
+    final obj = data['object'];
     if (obj is! Map) return;
     final object = Map<String, dynamic>.from(obj);
     final reason = object['reason']?.toString() ?? 'event';
@@ -494,48 +543,142 @@ class LiveboxMonitorService {
 
     _eventsReceived++;
 
-    // 1. Livebox Statistics events (per-device byte counters)
-    if (reason == 'Statistics' || handler.startsWith('HomeLan')) {
+    // 1. HomeLan interface statistics events (e.g. HomeLan.Interface.eth0.Stats)
+    if (handler.startsWith('HomeLan')) {
+      final intfName = handler
+          .replaceFirst('HomeLan.Interface.', '')
+          .replaceFirst('.Stats', '');
+      final logKey = 'homelan:$intfName';
+      final lastLog = _lastStatEventLogMs[logKey] ?? 0;
+      if (nowMs - lastLog >= 30000) {
+        _lastStatEventLogMs[logKey] = nowMs;
+        final rx = attrs['BytesReceived'] ?? attrs['RxBytes'];
+        final tx = attrs['BytesSent'] ?? attrs['TxBytes'];
+        final logged = db.insertEvent(
+          deviceMac: _liveboxMac,
+          deviceName: '$_liveboxModel ($intfName)',
+          reason: 'HomeLan',
+          summary: (rx != null || tx != null)
+              ? 'Interface $intfName · Rx=$rx / Tx=$tx'
+              : '$handler · $reason',
+          rawJson: jsonEncode(event),
+          tsMs: nowMs,
+        );
+        _broadcast('event', logged.toJson());
+      }
+      return;
+    }
+
+    // Extract device MAC from handler (preferred) or attributes
+    String mac = '';
+    final handlerMacMatch = _macPattern.firstMatch(handler);
+    if (handlerMacMatch != null) {
+      mac = handlerMacMatch.group(1)!.toUpperCase();
+    } else if (attrs['Key'] != null) {
+      final m = _macPattern.firstMatch(attrs['Key'].toString());
+      if (m != null) mac = m.group(1)!.toUpperCase();
+    } else if (attrs['PhysAddress'] != null) {
+      final m = _macPattern.firstMatch(attrs['PhysAddress'].toString());
+      if (m != null) mac = m.group(1)!.toUpperCase();
+    } else {
+      for (final k in attrs.keys) {
+        final m = _macPattern.firstMatch(k.toString());
+        if (m != null) {
+          mac = m.group(1)!.toUpperCase();
+          break;
+        }
+      }
+    }
+
+    // Helper: unwrap nested `attrs[mac]` (case-insensitive) used by Orange Livebox
+    Map<String, dynamic> effectiveAttrs = attrs;
+    if (mac.isNotEmpty) {
       for (final entry in attrs.entries) {
-        final key = entry.key.toUpperCase();
-        if (!RegExp(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$').hasMatch(key)) continue;
-        if (entry.value is! Map) continue;
-        final stat = Map<String, dynamic>.from(entry.value as Map);
-        final rx = (stat['RxBytes'] as num?)?.toInt();
-        final tx = (stat['TxBytes'] as num?)?.toInt();
-        if (rx != null && tx != null) {
-          _recordByteCounter(key, rxBytes: rx, txBytes: tx, tsMs: nowMs);
+        if (entry.key.toString().toUpperCase() == mac && entry.value is Map) {
+          effectiveAttrs = Map<String, dynamic>.from(entry.value as Map);
+          break;
+        }
+      }
+    }
+
+    // 2. Per-device Livebox Statistics events (Ethernet + Wi-Fi byte counters)
+    if (reason == 'Statistics') {
+      final rx = (effectiveAttrs['RxBytes'] as num?)?.toInt();
+      final tx = (effectiveAttrs['TxBytes'] as num?)?.toInt();
+      if (mac.isNotEmpty && rx != null && tx != null) {
+        final parsedTs =
+            DateTime.tryParse(effectiveAttrs['Timestamp']?.toString() ?? '')
+                ?.millisecondsSinceEpoch;
+        final sampleTs =
+            (parsedTs != null && (nowMs - parsedTs).abs() < 3600000)
+                ? parsedTs
+                : nowMs;
+        final rates = _recordByteCounter(
+          mac,
+          counterKey: 'ev:$mac',
+          rxBytes: rx,
+          txBytes: tx,
+          tsMs: sampleTs,
+        );
+
+        // Log a throttled Statistics event (max 1 per 30s per device) so the
+        // live Events feed shows active traffic without flooding SQLite.
+        final logKey = 'stat:$mac';
+        final lastLog = _lastStatEventLogMs[logKey] ?? 0;
+        if (nowMs - lastLog >= 30000 &&
+            (rates == null || (rates.rxBps + rates.txBps) > 0)) {
+          _lastStatEventLogMs[logKey] = nowMs;
+          final devName = db.getDevice(mac)?.name ?? mac;
+          final summary = rates != null
+              ? 'Débit ↓ ${_fmtRate(rates.rxBps)} · ↑ ${_fmtRate(rates.txBps)}'
+              : 'Compteurs reçus (Rx=$rx, Tx=$tx)';
+          final logged = db.insertEvent(
+            deviceMac: mac,
+            deviceName: devName,
+            reason: 'Statistics',
+            summary: summary,
+            rawJson: jsonEncode(event),
+            tsMs: nowMs,
+          );
+          _broadcast('event', logged.toJson());
         }
       }
       return;
     }
 
-    // 2. Device lifecycle / state events (Devices.Device.<MAC>)
-    String mac = '';
-    if (handler.startsWith('Devices.Device.')) {
-      mac = handler.substring('Devices.Device.'.length).split('.').first.toUpperCase();
-    } else if (attrs['Key'] != null) {
-      mac = attrs['Key'].toString().toUpperCase();
-    } else if (attrs['PhysAddress'] != null) {
-      mac = attrs['PhysAddress'].toString().toUpperCase();
+    // Non-MAC system event (keep visible in event log rather than dropping)
+    if (mac.isEmpty) {
+      final logged = db.insertEvent(
+        deviceMac: _liveboxMac,
+        deviceName: _liveboxModel,
+        reason: reason,
+        summary: '$handler · $reason',
+        rawJson: jsonEncode(event),
+        tsMs: nowMs,
+      );
+      _broadcast('event', logged.toJson());
+      return;
     }
-    if (!RegExp(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$').hasMatch(mac)) return;
 
+    // 3. Device lifecycle / state / IP / name / RSSI events
     final existing = db.getDevice(mac);
-    final incomingActive = attrs.containsKey('Active')
-        ? attrs['Active'] == true
+    final incomingActive = effectiveAttrs.containsKey('Active')
+        ? effectiveAttrs['Active'] == true
         : (reason.contains('deleted') ? false : (existing?.active ?? true));
-    final incomingName = attrs['Name']?.toString().trim();
-    final incomingIp = attrs['IPAddress']?.toString();
-    final incomingRssi = (attrs['SignalStrength'] as num?)?.toInt();
-    final linkType = attrs.containsKey('InterfaceType') ||
-            attrs.containsKey('InterfaceName') ||
-            attrs.containsKey('SignalStrength')
-        ? LiveboxTopologyParser.classifyLinkType(attrs)
+    final incomingName = effectiveAttrs['Name']?.toString().trim();
+    final incomingIp = (effectiveAttrs['IPAddress'] ??
+            effectiveAttrs['Address'])
+        ?.toString()
+        .trim();
+    final incomingRssi = (effectiveAttrs['SignalStrength'] as num?)?.toInt();
+    final linkType = effectiveAttrs.containsKey('InterfaceType') ||
+            effectiveAttrs.containsKey('InterfaceName') ||
+            effectiveAttrs.containsKey('SignalStrength')
+        ? LiveboxTopologyParser.classifyLinkType(effectiveAttrs)
         : (existing?.linkType ?? 'eth');
-    final intfLabel = attrs.containsKey('InterfaceName')
+    final intfLabel = effectiveAttrs.containsKey('InterfaceName')
         ? LiveboxTopologyParser.friendlyInterface(
-            attrs['InterfaceName'].toString(),
+            effectiveAttrs['InterfaceName'].toString(),
             linkType,
           )
         : (existing?.interfaceName ?? '');
@@ -545,8 +688,12 @@ class LiveboxMonitorService {
       name: (incomingName != null && incomingName.isNotEmpty)
           ? incomingName
           : (existing?.name ?? mac),
-      vendor: attrs['VendorClassID']?.toString() ?? existing?.vendor ?? '',
-      deviceType: attrs['DeviceType']?.toString() ?? existing?.deviceType ?? 'Unknown',
+      vendor: effectiveAttrs['VendorClassID']?.toString() ??
+          existing?.vendor ??
+          '',
+      deviceType: effectiveAttrs['DeviceType']?.toString() ??
+          existing?.deviceType ??
+          'Unknown',
       ipAddress: (incomingIp != null && incomingIp.isNotEmpty)
           ? incomingIp
           : (existing?.ipAddress ?? ''),
@@ -571,13 +718,23 @@ class LiveboxMonitorService {
 
     String summary = reason;
     if (upsert.isNew) {
-      summary = 'Nouvel équipement détecté (${upsert.device.ipAddress.isNotEmpty ? upsert.device.ipAddress : "sans IP"})';
+      summary =
+          'Nouvel équipement détecté (${upsert.device.ipAddress.isNotEmpty ? upsert.device.ipAddress : "sans IP"})';
     } else if (upsert.presenceChanged) {
-      summary = upsert.device.active ? 'Connecté au réseau' : 'Déconnecté du réseau';
-    } else if (incomingIp != null && incomingIp != existing?.ipAddress) {
+      summary =
+          upsert.device.active ? 'Connecté au réseau' : 'Déconnecté du réseau';
+    } else if (incomingIp != null &&
+        incomingIp.isNotEmpty &&
+        incomingIp != existing?.ipAddress) {
       summary = 'Adresse IP attribuée : $incomingIp';
-    } else if (incomingName != null && incomingName != existing?.name) {
+    } else if (incomingName != null &&
+        incomingName.isNotEmpty &&
+        incomingName != existing?.name) {
       summary = 'Renommé en $incomingName';
+    } else if (incomingRssi != null && incomingRssi != existing?.rssi) {
+      summary = 'Signal Wi-Fi : $incomingRssi dBm';
+    } else if (effectiveAttrs.isNotEmpty) {
+      summary = '$reason (${effectiveAttrs.keys.take(4).join(", ")})';
     }
 
     final logged = db.insertEvent(
@@ -595,6 +752,14 @@ class LiveboxMonitorService {
     if (upsert.isNew && _initialSeedComplete) {
       await _handleNewDeviceDiscovered(upsert.device, event);
     }
+  }
+
+  static String _fmtRate(double bytesPerSec) {
+    final bits = bytesPerSec * 8;
+    if (bits >= 1e9) return '${(bits / 1e9).toStringAsFixed(2)} Gbps';
+    if (bits >= 1e6) return '${(bits / 1e6).toStringAsFixed(2)} Mbps';
+    if (bits >= 1e3) return '${(bits / 1e3).toStringAsFixed(1)} Kbps';
+    return '${bits.round()} bps';
   }
 
   Future<void> _handleNewDeviceDiscovered(
@@ -659,13 +824,14 @@ class LiveboxMonitorService {
                   st['Key']?.toString() ??
                   '')
               .toUpperCase();
-          if (!RegExp(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$').hasMatch(mac)) continue;
+          if (!_macPattern.hasMatch(mac)) continue;
           // Router TxBytes = device Download (Rx), Router RxBytes = device Upload (Tx)
           final routerTx = (st['TxBytes'] as num?)?.toInt();
           final routerRx = (st['RxBytes'] as num?)?.toInt();
           if (routerTx != null && routerRx != null) {
             _recordByteCounter(
               mac,
+              counterKey: 'wifi:${intf}_$mac',
               rxBytes: routerTx,
               txBytes: routerRx,
               tsMs: nowMs,
@@ -676,18 +842,19 @@ class LiveboxMonitorService {
     }
   }
 
-  void _recordByteCounter(
+  ({double rxBps, double txBps})? _recordByteCounter(
     String mac, {
+    required String counterKey,
     required int rxBytes,
     required int txBytes,
     required int tsMs,
   }) {
-    final prev = _prevCounters[mac];
-    _prevCounters[mac] = _ByteCounter(rxBytes, txBytes, tsMs);
-    if (prev == null) return;
+    final prev = _prevCounters[counterKey];
+    _prevCounters[counterKey] = _ByteCounter(rxBytes, txBytes, tsMs);
+    if (prev == null) return null;
 
     final dtSec = (tsMs - prev.tsMs) / 1000.0;
-    if (dtSec <= 0.2) return;
+    if (dtSec <= 0.2) return null;
 
     int delta(int curr, int old) {
       if (curr >= old) return curr - old;
@@ -719,6 +886,7 @@ class LiveboxMonitorService {
         'timestampMs': tsMs,
       });
     }
+    return (rxBps: rxBps, txBps: txBps);
   }
 
   Future<void> _refreshTopologyAndPrune(

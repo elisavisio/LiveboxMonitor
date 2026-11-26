@@ -136,6 +136,32 @@ class ReadOnlyLiveboxClient {
     return res.whereType<Map<String, dynamic>>().toList();
   }
 
+  /// Discovers all Wi-Fi VAP NeMo interface keys (e.g. `vap2g0priv`,
+  /// `vap5g0priv`, `vap6g0priv`, `wl0`, `eth6`, guest VAPs) using read-only
+  /// `NeMo.Intf.<lan|guest>:getMIBs`.
+  Future<List<String>> getWifiVapInterfaceKeys() async {
+    final keys = <String>{};
+    for (final bridge in const ['lan', 'guest']) {
+      try {
+        final res = await readOnlyCall(
+          'NeMo.Intf.$bridge',
+          method: 'getMIBs',
+          args: const {'mibs': 'wlanvap'},
+        );
+        if (res is Map) {
+          final vaps = res['wlanvap'];
+          if (vaps is Map) {
+            for (final k in vaps.keys) {
+              final s = k.toString().trim();
+              if (s.isNotEmpty) keys.add(s);
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    return keys.toList();
+  }
+
   Future<Map<String, dynamic>> getInterfaceNetDevStats(String intfKey) async {
     final res = await readOnlyCall(
       'NeMo.Intf.$intfKey',
