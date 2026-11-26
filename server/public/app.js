@@ -157,6 +157,30 @@
   }
 
   // ---------------- Topology SVG Map + Connection Tree ----------------
+  function hasIpAddress(node) {
+    return Boolean(node && node.ipAddress && String(node.ipAddress).trim() !== '');
+  }
+
+  function filterTopologyWithIp(root) {
+    if (!root) return null;
+    function filterNode(node) {
+      const filteredKids = (node.children || []).map(filterNode).filter(Boolean);
+      if (node.role === 'livebox') {
+        return { ...node, children: filteredKids };
+      }
+      if (node.role === 'repeater') {
+        if (hasIpAddress(node) || filteredKids.length > 0) {
+          return { ...node, children: filteredKids };
+        }
+        return null;
+      }
+      // Leaf device: only keep if it has an IP address
+      if (!hasIpAddress(node)) return null;
+      return { ...node, children: filteredKids };
+    }
+    return filterNode(root);
+  }
+
   function renderTopology() {
     renderTopologySvg();
     renderTopologyTree();
@@ -164,7 +188,7 @@
 
   function renderTopologySvg() {
     const svg = $('topology-svg');
-    const root = state.topology;
+    const root = filterTopologyWithIp(state.topology);
     if (!root) {
       svg.innerHTML = `<text x="490" y="250" text-anchor="middle" fill="#94a3b8" font-size="14">Topologie en cours de chargement...</text>`;
       return;
@@ -282,7 +306,7 @@
 
   function renderTopologyTree() {
     const box = $('topology-tree');
-    const root = state.topology;
+    const root = filterTopologyWithIp(state.topology);
     if (!root) {
       box.innerHTML = '<div class="muted-sm">Chargement...</div>';
       return;
@@ -937,11 +961,12 @@
     es.addEventListener('topology', (e) => {
       state.topology = JSON.parse(e.data);
       renderTopology();
+      updateAutoRefreshBadge();
     });
 
     es.addEventListener('tick', () => {
-      // Lightweight periodic refresh of rates & overview
-      refreshDevicesAndOverview();
+      // Lightweight periodic refresh of rates, overview & visual map
+      refreshLiveViews();
     });
 
     es.addEventListener('bandwidth', (e) => {
@@ -952,16 +977,40 @@
         dev.txBytesPerSec = b.txBytesPerSec;
         renderDevicesTable();
       }
+      scheduleTopologyRefresh();
     });
   }
 
-  async function refreshDevicesAndOverview() {
+  let topoDebounceTimer = null;
+  function scheduleTopologyRefresh() {
+    if (topoDebounceTimer) return;
+    topoDebounceTimer = setTimeout(() => {
+      topoDebounceTimer = null;
+      refreshOverviewAndTopology();
+    }, 1500);
+  }
+
+  function updateAutoRefreshBadge() {
+    const badge = $('topo-autorefresh-badge');
+    if (badge) {
+      badge.textContent = `↻ Auto 10s · ${formatTime(Date.now())}`;
+    }
+  }
+
+  async function refreshLiveViews() {
     try {
-      const [ov, devs] = await Promise.all([api('/api/overview'), api('/api/devices')]);
+      const [ov, devs, topo] = await Promise.all([
+        api('/api/overview'),
+        api('/api/devices'),
+        api('/api/topology'),
+      ]);
       state.overview = ov;
       state.devices = devs.devices || [];
+      state.topology = topo.topology;
       renderOverview();
+      renderTopology();
       renderDevicesTable();
+      updateAutoRefreshBadge();
       if (document.getElementById('tab-graphs').classList.contains('active')) {
         loadSelectedDeviceGraphs();
       }
@@ -975,6 +1024,7 @@
       state.topology = topo.topology;
       renderOverview();
       renderTopology();
+      updateAutoRefreshBadge();
     } catch (_) {}
   }
 
@@ -995,6 +1045,7 @@
       renderDevicesTable();
       populateGraphDevicePicker();
       renderEventsTable();
+      updateAutoRefreshBadge();
     } catch (e) {
       toast(`Erreur de chargement : ${e.message}`, true);
     }
@@ -1048,7 +1099,7 @@
     });
 
     $('btn-refresh-events').addEventListener('click', loadEvents);
-    $('btn-refresh-topo').addEventListener('click', refreshOverviewAndTopology);
+    $('btn-refresh-topo').addEventListener('click', refreshLiveViews);
 
     $('btn-sim-device').addEventListener('click', async () => {
       try {
@@ -1071,6 +1122,13 @@
 
     loadAll();
     connectSse();
+
+    // Automatic periodic refresh every 10s (pauses when browser tab is hidden)
+    setInterval(() => {
+      if (!document.hidden) {
+        refreshLiveViews();
+      }
+    }, 10000);
   }
 
   document.addEventListener('DOMContentLoaded', init);

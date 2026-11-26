@@ -290,9 +290,12 @@ class LiveboxMonitorService {
           (_) => unawaited(_pollWifiStationStats(client, epoch)),
         );
         _topologyTimer?.cancel();
+        int topoTick = 0;
         _topologyTimer = Timer.periodic(
-          const Duration(seconds: 60),
-          (_) => unawaited(_refreshTopologyAndPrune(client, epoch)),
+          const Duration(seconds: 15),
+          (_) => unawaited(
+            _refreshTopologyAndPrune(client, epoch, prune: (++topoTick % 4) == 0),
+          ),
         );
 
         // 3. Main Livebox event loop (Devices.Device + HomeLan)
@@ -718,8 +721,9 @@ class LiveboxMonitorService {
 
   Future<void> _refreshTopologyAndPrune(
     ReadOnlyLiveboxClient client,
-    int epoch,
-  ) async {
+    int epoch, {
+    bool prune = true,
+  }) async {
     if (!_running || epoch != _loopEpoch || !_connected || _demoMode) return;
     try {
       final rawTopo = await client.getTopology();
@@ -733,7 +737,9 @@ class LiveboxMonitorService {
         _broadcast('topology', getTopology());
       }
     } catch (_) {}
-    db.pruneOldHistory(retentionDays: 7);
+    if (prune) {
+      db.pruneOldHistory(retentionDays: 7);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1204,6 +1210,12 @@ class LiveboxMonitorService {
   ) {
     final dbDev = devicesByMac[node.id.toUpperCase()];
     final json = node.toJson();
+    if (dbDev != null) {
+      if (dbDev.ipAddress.isNotEmpty) json['ipAddress'] = dbDev.ipAddress;
+      if (dbDev.name.isNotEmpty) json['name'] = dbDev.name;
+      json['active'] = dbDev.active;
+      if (dbDev.rssi != null) json['rssi'] = dbDev.rssi;
+    }
     json['trust'] = dbDev?.trust.name ?? node.trust;
     json['rxBytesPerSec'] = dbDev?.rxBytesPerSec ?? 0;
     json['txBytesPerSec'] = dbDev?.txBytesPerSec ?? 0;
