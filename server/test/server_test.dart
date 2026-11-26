@@ -498,6 +498,35 @@ void main() {
       expect(events.any((e) => e['reason'] == 'Statistics'), isTrue);
       expect(events.any((e) => e['reason'] == 'HomeLan'), isTrue);
       expect(events.any((e) => e['reason'] == 'device_updated'), isTrue);
+
+      // Fresh 5s Wi-Fi sample (~433 Mbps = 54.125 MB/s) must NOT be clobbered
+      // by a slower 60s Devices.Device Statistics average (~90 Mbps)
+      service.recordWifiStationSample(
+        mac: mac,
+        rxBytes: 500000000,
+        txBytes: 20000000,
+        rxBytesPerSec: 54125000,
+        txBytesPerSec: 2500000,
+      );
+      final t3 = DateTime.now().add(const Duration(seconds: 5)).toUtc().toIso8601String();
+      await service.processLiveboxEvent({
+        'data': {
+          'handler': 'Devices.Device.$mac',
+          'object': {
+            'reason': 'Statistics',
+            'attributes': {
+              mac: {
+                'RxBytes': 1550000,
+                'TxBytes': 310000,
+                'Timestamp': t3,
+              },
+            },
+          },
+        },
+      });
+      expect(service.db.getDevice(mac)!.rxBytesPerSec, closeTo(54125000, 1));
+      final ovStats = service.getOverview()['stats'] as Map;
+      expect(ovStats['totalRxBytesPerSec'] as num, closeTo(54125000, 1));
     });
   });
 }

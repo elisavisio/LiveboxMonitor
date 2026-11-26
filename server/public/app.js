@@ -35,6 +35,14 @@
     return Math.round(bits) + ' bps';
   }
 
+  function formatBytesRate(bps) {
+    const b = Number(bps) || 0;
+    if (b >= 1e9) return (b / 1e9).toFixed(2) + ' Go/s';
+    if (b >= 1e6) return (b / 1e6).toFixed(1) + ' Mo/s';
+    if (b >= 1e3) return (b / 1e3).toFixed(0) + ' Ko/s';
+    return Math.round(b) + ' o/s';
+  }
+
   function formatTime(ms) {
     if (!ms) return '—';
     const d = new Date(ms);
@@ -149,7 +157,7 @@
     $('kpi-unknown').textContent = s.unknownDevices ?? 0;
     $('kpi-unknown-sub').textContent = `${s.activeUnknownDevices ?? 0} actif(s) actuellement`;
     $('kpi-bandwidth').textContent = `↓ ${formatRate(s.totalRxBytesPerSec)}`;
-    $('kpi-bw-sub').textContent = `↑ ${formatRate(s.totalTxBytesPerSec)}`;
+    $('kpi-bw-sub').textContent = `${formatBytesRate(s.totalRxBytesPerSec)} · ↑ ${formatRate(s.totalTxBytesPerSec)}`;
     $('kpi-events').textContent = ov.eventsReceived ?? 0;
     $('kpi-wan-sub').textContent = `WAN : ${ov.wanState || '—'} ${ov.wanIp ? '(' + ov.wanIp + ')' : ''}`;
 
@@ -979,6 +987,12 @@
         dev.rxBytesPerSec = b.rxBytesPerSec;
         dev.txBytesPerSec = b.txBytesPerSec;
         renderDevicesTable();
+        if (state.overview && state.overview.stats) {
+          const activeWithIp = state.devices.filter((d) => d.active && d.ipAddress && d.ipAddress.trim() !== '');
+          state.overview.stats.totalRxBytesPerSec = activeWithIp.reduce((sum, d) => sum + (Number(d.rxBytesPerSec) || 0), 0);
+          state.overview.stats.totalTxBytesPerSec = activeWithIp.reduce((sum, d) => sum + (Number(d.txBytesPerSec) || 0), 0);
+          renderOverview();
+        }
       }
       scheduleTopologyRefresh();
     });

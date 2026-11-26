@@ -26,7 +26,7 @@ class _ByteCounter {
 /// - Maintains Livebox -> Repeaters -> Eth/Wi-Fi -> Devices topology tree.
 /// - Dispatches SMTP alerts whenever a new unknown device joins the network.
 class LiveboxMonitorService {
-  static const String appVersion = '1.1.1';
+  static const String appVersion = '1.1.2';
 
   static final RegExp _macPattern =
       RegExp(r'([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})');
@@ -76,6 +76,7 @@ class LiveboxMonitorService {
   LiveboxTopologyNode? _cachedTopology;
   final List<String> _wifiIntfKeys = <String>[];
   final Map<String, _ByteCounter> _prevCounters = <String, _ByteCounter>{};
+  final Map<String, int> _lastWifiStatsMs = <String, int>{};
   final Map<String, int> _lastStatEventLogMs = <String, int>{};
   final Set<String> _notifiedMacs = <String>{};
 
@@ -196,6 +197,7 @@ class LiveboxMonitorService {
     _wanIp = '';
     _eventsReceived = 0;
     _prevCounters.clear();
+    _lastWifiStatsMs.clear();
     _lastStatEventLogMs.clear();
     _wifiIntfKeys.clear();
     _notifiedMacs.clear();
@@ -613,13 +615,19 @@ class LiveboxMonitorService {
             (parsedTs != null && (nowMs - parsedTs).abs() < 3600000)
                 ? parsedTs
                 : nowMs;
+        final hasFreshWifiStats =
+            (nowMs - (_lastWifiStatsMs[mac] ?? 0)) < 15000;
         final rates = _recordByteCounter(
           mac,
           counterKey: 'ev:$mac',
           rxBytes: rx,
           txBytes: tx,
           tsMs: sampleTs,
+          persistToDb: !hasFreshWifiStats,
         );
+        if (!hasFreshWifiStats && rates != null) {
+          _broadcast('overview', getOverview());
+        }
 
         // Log a throttled Statistics event (max 1 per 30s per device) so the
         // live Events feed shows active traffic without flooding SQLite.
@@ -628,9 +636,16 @@ class LiveboxMonitorService {
         if (nowMs - lastLog >= 30000 &&
             (rates == null || (rates.rxBps + rates.txBps) > 0)) {
           _lastStatEventLogMs[logKey] = nowMs;
-          final devName = db.getDevice(mac)?.name ?? mac;
-          final summary = rates != null
-              ? 'Débit ↓ ${_fmtRate(rates.rxBps)} · ↑ ${_fmtRate(rates.txBps)}'
+          final dev = db.getDevice(mac);
+          final devName = dev?.name ?? mac;
+          final displayRx = hasFreshWifiStats && dev != null
+              ? dev.rxBytesPerSec
+              : (rates?.rxBps ?? 0);
+          final displayTx = hasFreshWifiStats && dev != null
+              ? dev.txBytesPerSec
+              : (rates?.txBps ?? 0);
+          final summary = (rates != null || hasFreshWifiStats)
+              ? 'Débit ↓ ${_fmtRate(displayRx)} · ↑ ${_fmtRate(displayTx)}'
               : 'Compteurs reçus (Rx=$rx, Tx=$tx)';
           final logged = db.insertEvent(
             deviceMac: mac,
@@ -814,6 +829,9 @@ class LiveboxMonitorService {
   ) async {
     if (!_running || epoch != _loopEpoch || !_connected || _demoMode) return;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final aggregated =
+        <String, ({double rxBps, double txBps, int rxBytes, int txBytes, bool hasRate})>{};
+
     for (final intf in List<String>.from(_wifiIntfKeys)) {
       if (epoch != _loopEpoch) return;
       try {
@@ -829,16 +847,76 @@ class LiveboxMonitorService {
           final routerTx = (st['TxBytes'] as num?)?.toInt();
           final routerRx = (st['RxBytes'] as num?)?.toInt();
           if (routerTx != null && routerRx != null) {
-            _recordByteCounter(
+            final rates = _recordByteCounter(
               mac,
               counterKey: 'wifi:${intf}_$mac',
               rxBytes: routerTx,
               txBytes: routerRx,
               tsMs: nowMs,
+              persistToDb: false,
+            );
+            final prevAgg = aggregated[mac];
+            aggregated[mac] = (
+              rxBps: (prevAgg?.rxBps ?? 0) + (rates?.rxBps ?? 0),
+              txBps: (prevAgg?.txBps ?? 0) + (rates?.txBps ?? 0),
+              rxBytes: max(prevAgg?.rxBytes ?? 0, routerTx),
+              txBytes: max(prevAgg?.txBytes ?? 0, routerRx),
+              hasRate: (prevAgg?.hasRate ?? false) || rates != null,
             );
           }
         }
       } catch (_) {}
+    }
+
+    bool anyUpdated = false;
+    for (final entry in aggregated.entries) {
+      final mac = entry.key;
+      final agg = entry.value;
+      if (!agg.hasRate) continue;
+      recordWifiStationSample(
+        mac: mac,
+        rxBytes: agg.rxBytes,
+        txBytes: agg.txBytes,
+        rxBytesPerSec: agg.rxBps,
+        txBytesPerSec: agg.txBps,
+        tsMs: nowMs,
+      );
+      anyUpdated = true;
+    }
+
+    if (anyUpdated) {
+      _broadcast('overview', getOverview());
+    }
+  }
+
+  /// Persists an aggregated 5-second Wi-Fi station sample and marks this MAC
+  /// as Wi-Fi-tracked so slower 60-second `Statistics` events do not overwrite it.
+  void recordWifiStationSample({
+    required String mac,
+    required int rxBytes,
+    required int txBytes,
+    required double rxBytesPerSec,
+    required double txBytesPerSec,
+    int? tsMs,
+  }) {
+    final norm = mac.toUpperCase();
+    final ts = tsMs ?? DateTime.now().millisecondsSinceEpoch;
+    _lastWifiStatsMs[norm] = ts;
+    if (db.getDevice(norm) != null) {
+      db.updateDeviceBandwidth(
+        mac: norm,
+        rxBytes: rxBytes,
+        txBytes: txBytes,
+        rxBytesPerSec: rxBytesPerSec,
+        txBytesPerSec: txBytesPerSec,
+        tsMs: ts,
+      );
+      _broadcast('bandwidth', {
+        'mac': norm,
+        'rxBytesPerSec': rxBytesPerSec,
+        'txBytesPerSec': txBytesPerSec,
+        'timestampMs': ts,
+      });
     }
   }
 
@@ -848,6 +926,7 @@ class LiveboxMonitorService {
     required int rxBytes,
     required int txBytes,
     required int tsMs,
+    bool persistToDb = true,
   }) {
     final prev = _prevCounters[counterKey];
     _prevCounters[counterKey] = _ByteCounter(rxBytes, txBytes, tsMs);
@@ -870,7 +949,7 @@ class LiveboxMonitorService {
     final rxBps = dRx / dtSec;
     final txBps = dTx / dtSec;
 
-    if (db.getDevice(mac) != null) {
+    if (persistToDb && db.getDevice(mac) != null) {
       db.updateDeviceBandwidth(
         mac: mac,
         rxBytes: rxBytes,

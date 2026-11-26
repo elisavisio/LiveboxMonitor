@@ -1,6 +1,6 @@
 name: livebox_monitor_server
 description: Livebox Monitor read-only event-driven server built with Dart Frog, SQLite, AES-256-GCM secret vault, SMTP alerts, and Web UI.
-version: 1.1.1+1
+version: 1.1.2+1
 publish_to: none
 
 environment:
