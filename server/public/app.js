@@ -492,7 +492,11 @@
   // ---------------- Presence & Bandwidth Charts ----------------
   function populateGraphDevicePicker() {
     const sel = $('graph-device-select');
-    if (!state.devices.length) return;
+    if (!state.devices.length) {
+      state.selectedMac = null;
+      sel.innerHTML = '<option value="">Aucun équipement</option>';
+      return;
+    }
     if (!state.selectedMac || !state.devices.some((d) => d.mac === state.selectedMac)) {
       const activeFirst = state.devices.find((d) => d.active) || state.devices[0];
       state.selectedMac = activeFirst.mac;
@@ -904,7 +908,13 @@
       renderOverview();
     });
 
-    es.addEventListener('status', () => refreshOverviewAndTopology());
+    es.addEventListener('reload', () => {
+      state.selectedMac = null;
+      state.graphDetail = null;
+      loadAll();
+    });
+
+    es.addEventListener('status', () => loadAll());
 
     es.addEventListener('device_update', (e) => {
       upsertLocalDevice(JSON.parse(e.data));

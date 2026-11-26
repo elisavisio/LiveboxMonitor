@@ -325,5 +325,72 @@ void main() {
       expect(updated?.trust, equals(DeviceTrust.known));
       expect(updated?.note, equals('OK'));
     });
+
+    test('switching from Demo Mode to real Livebox clears all demo data and preserves real devices',
+        () async {
+      // Confirm demo mode has seeded devices
+      expect(service.isDemoMode, isTrue);
+      expect(service.listDevicesJson().length, greaterThanOrEqualTo(10));
+
+      // Switch to real Livebox mode (empty password -> stays disconnected cleanly without network)
+      await service.updateLiveboxConfig(
+        url: 'http://192.168.1.1/',
+        username: 'admin',
+        password: '',
+        demoMode: false,
+      );
+
+      expect(service.isDemoMode, isFalse);
+      // Zero demo devices, zero demo events, and liveboxModel reset
+      expect(service.listDevicesJson(), isEmpty);
+      expect(service.listEventsJson(), isEmpty);
+      final ov = service.getOverview();
+      expect(ov['liveboxModel'], equals('Livebox'));
+      expect(ov['wanIp'], isEmpty);
+      expect((service.getTopology()['children'] as List), isEmpty);
+
+      // Verify purgeDemoArtifacts removes legacy demo MACs while keeping real ones
+      final realMac = '12:34:56:78:9A:BC';
+      service.db.upsertDevice(
+        ServerDevice(
+          mac: realMac,
+          name: 'Mon-Vrai-PC',
+          vendor: 'RealVendor',
+          deviceType: 'Computer',
+          ipAddress: '192.168.1.42',
+          active: true,
+          linkType: 'eth',
+          interfaceName: 'Ethernet ETH1',
+          trust: DeviceTrust.known,
+          firstSeenMs: 1700000000000,
+          lastSeenMs: 1700000000000,
+          lastChangedMs: 1700000000000,
+        ),
+      );
+      service.db.upsertDevice(
+        ServerDevice(
+          mac: LiveboxMonitorService.demoSeedMacs.first,
+          name: 'Répéteur Wi-Fi 6 Salon',
+          vendor: 'Sagemcom',
+          deviceType: 'Wi-Fi Repeater',
+          ipAddress: '192.168.1.10',
+          active: true,
+          linkType: 'eth',
+          interfaceName: 'Eth 10G / 1',
+          firstSeenMs: 1700000000000,
+          lastSeenMs: 1700000000000,
+          lastChangedMs: 1700000000000,
+        ),
+      );
+
+      final purged = service.db.purgeDemoArtifacts(
+        LiveboxMonitorService.demoSeedMacs,
+        simulatedPrefix: 'DE:AD:BE:EF:',
+      );
+      expect(purged, equals(1));
+      final remaining = service.listDevicesJson();
+      expect(remaining.length, equals(1));
+      expect(remaining.first['mac'], equals(realMac));
+    });
   });
 }

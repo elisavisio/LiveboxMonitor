@@ -26,7 +26,21 @@ class _ByteCounter {
 /// - Maintains Livebox -> Repeaters -> Eth/Wi-Fi -> Devices topology tree.
 /// - Dispatches SMTP alerts whenever a new unknown device joins the network.
 class LiveboxMonitorService {
-  final MonitorDatabase db;
+  static const List<String> demoSeedMacs = [
+    'AA:BB:CC:10:00:01',
+    'AA:BB:CC:10:00:02',
+    'D4:5D:64:AA:11:01',
+    '00:11:32:BB:22:02',
+    'B8:27:EB:CC:33:03',
+    '7C:2E:BD:DD:44:04',
+    'F0:99:B6:EE:55:05',
+    '3C:6A:A7:FF:66:06',
+    '48:E1:E9:77:88:07',
+    '9A:4C:12:88:99:08',
+  ];
+
+  final MonitorDatabase _liveDb;
+  MonitorDatabase? _demoDb;
   final SecretVault vault;
   final EmailNotifier emailNotifier;
   final String? dashboardUrl;
@@ -45,7 +59,7 @@ class LiveboxMonitorService {
   bool _initialSeedComplete = false;
   String _statusMessage = 'Initialisation...';
   String _liveboxModel = 'Livebox';
-  String _liveboxIp = '192.168.1.1';
+  String _liveboxIp = '';
   String _liveboxMac = 'LIVEBOX';
   String _wanState = 'unknown';
   String _wanIp = '';
@@ -71,11 +85,17 @@ class LiveboxMonitorService {
   int _demoGuestCounter = 1;
 
   LiveboxMonitorService({
-    required this.db,
+    required MonitorDatabase db,
     required this.vault,
     EmailNotifier? emailNotifier,
     this.dashboardUrl,
-  }) : emailNotifier = emailNotifier ?? EmailNotifier();
+  })  : _liveDb = db,
+        emailNotifier = emailNotifier ?? EmailNotifier();
+
+  /// Returns an isolated in-memory database when in Demo Mode so real Livebox
+  /// persistent storage is never polluted with simulated devices or history.
+  MonitorDatabase get db =>
+      _demoMode ? (_demoDb ??= MonitorDatabase.openInMemory()) : _liveDb;
 
   Stream<Map<String, dynamic>> get sseEvents => _sseController.stream;
   bool get isConnected => _connected;
@@ -162,8 +182,20 @@ class LiveboxMonitorService {
     _demoTimer = null;
     _connected = false;
     _initialSeedComplete = false;
+    _cachedTopology = null;
+    _liveboxModel = 'Livebox';
+    _liveboxIp = '';
+    _liveboxMac = 'LIVEBOX';
+    _wanState = 'unknown';
+    _wanIp = '';
+    _eventsReceived = 0;
     _prevCounters.clear();
     _wifiIntfKeys.clear();
+    _notifiedMacs.clear();
+    if (_demoDb != null) {
+      _demoDb!.close();
+      _demoDb = null;
+    }
     if (_client != null) {
       try {
         await _client!.close();
@@ -178,25 +210,37 @@ class LiveboxMonitorService {
 
     if (_liveboxConfig.demoMode) {
       _demoMode = true;
+      _demoDb = MonitorDatabase.openInMemory();
       _connected = true;
       _statusMessage = 'Mode Démo actif (simulation temps réel)';
       _seedDemoEnvironment();
       _startDemoTicker(epoch);
-      _broadcast('status', _statusPayload());
+      _broadcast('reload', _statusPayload());
       return;
     }
 
     _demoMode = false;
+    // Scrub any demo records that may have been persisted by an earlier version
+    final purged = _liveDb.purgeDemoArtifacts(
+      demoSeedMacs,
+      simulatedPrefix: 'DE:AD:BE:EF:',
+    );
+    if (purged > 0) {
+      stdout.writeln(
+        '[LiveboxMonitorServer] Purged $purged legacy demo device(s) from live SQLite DB',
+      );
+    }
+
     if (_liveboxConfig.password.isEmpty) {
       _connected = false;
       _statusMessage =
           'Mot de passe Livebox non configuré (configurez-le dans l\'onglet Configuration)';
-      _broadcast('status', _statusPayload());
+      _broadcast('reload', _statusPayload());
       return;
     }
 
     _statusMessage = 'Connexion lecture seule à ${_liveboxConfig.url}...';
-    _broadcast('status', _statusPayload());
+    _broadcast('reload', _statusPayload());
 
     unawaited(_runLiveEventLoop(epoch));
   }
@@ -236,6 +280,7 @@ class LiveboxMonitorService {
         // 1. Initial read-only seed (info + devices + topology)
         await _seedFromLivebox(client);
         _initialSeedComplete = true;
+        _broadcast('reload', _statusPayload());
         _broadcast('overview', getOverview());
 
         // 2. Periodic Wi-Fi station stats (5s) + topology refresh (60s)
@@ -1305,6 +1350,8 @@ class LiveboxMonitorService {
     _running = false;
     await _stopCurrentLoop();
     await _sseController.close();
-    db.close();
+    _demoDb?.close();
+    _demoDb = null;
+    _liveDb.close();
   }
 }

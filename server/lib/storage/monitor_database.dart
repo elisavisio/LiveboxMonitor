@@ -477,4 +477,32 @@ class MonitorDatabase {
       'DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY ts_ms DESC LIMIT 5000)',
     );
   }
+
+  /// Removes demo/simulated device records (e.g. left over from an earlier run
+  /// in Demo Mode) from all tables while preserving real Livebox devices.
+  int purgeDemoArtifacts(List<String> demoMacs, {String? simulatedPrefix}) {
+    int removed = 0;
+    for (final rawMac in demoMacs) {
+      final mac = rawMac.toUpperCase();
+      final existed = getDevice(mac) != null;
+      _db.execute('DELETE FROM devices WHERE mac = ?', [mac]);
+      _db.execute('DELETE FROM presence_history WHERE mac = ?', [mac]);
+      _db.execute('DELETE FROM bandwidth_samples WHERE mac = ?', [mac]);
+      _db.execute('DELETE FROM events WHERE mac = ?', [mac]);
+      if (existed) removed++;
+    }
+    if (simulatedPrefix != null && simulatedPrefix.isNotEmpty) {
+      final pattern = '${simulatedPrefix.toUpperCase()}%';
+      final rows = _db.select(
+        'SELECT mac FROM devices WHERE mac LIKE ?',
+        [pattern],
+      );
+      removed += rows.length;
+      _db.execute('DELETE FROM devices WHERE mac LIKE ?', [pattern]);
+      _db.execute('DELETE FROM presence_history WHERE mac LIKE ?', [pattern]);
+      _db.execute('DELETE FROM bandwidth_samples WHERE mac LIKE ?', [pattern]);
+      _db.execute('DELETE FROM events WHERE mac LIKE ?', [pattern]);
+    }
+    return removed;
+  }
 }
