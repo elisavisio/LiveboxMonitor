@@ -1,0 +1,17 @@
+# Exclude everything by default so Docker build context stays tiny (< 100 KB)
+*
+
+# Allow only the shared Livebox client package and the Dart Frog server
+!packages
+!packages/livebox_client
+!packages/livebox_client/**
+!server
+!server/**
+
+# Exclude build caches, local runtime data, and secrets inside allowed folders
+**/.dart_tool
+**/build
+**/data
+**/.env
+**/lbm_master_key.txt
+**/.DS_Store
