@@ -6,8 +6,10 @@ import 'package:livebox_monitor_server/services/email_notifier.dart';
 import 'package:livebox_monitor_server/services/livebox_monitor_service.dart';
 import 'package:livebox_monitor_server/storage/monitor_database.dart';
 import 'package:livebox_monitor_server/storage/secret_vault.dart';
+import 'package:livebox_monitor_server/utils/base_path.dart';
 import 'package:mailer/mailer.dart';
 import 'package:mailer/smtp_server.dart';
+import 'package:shelf/shelf.dart' as shelf;
 import 'package:test/test.dart';
 
 void main() {
@@ -527,6 +529,58 @@ void main() {
       expect(service.db.getDevice(mac)!.rxBytesPerSec, closeTo(54125000, 1));
       final ovStats = service.getOverview()['stats'] as Map;
       expect(ovStats['totalRxBytesPerSec'] as num, closeTo(54125000, 1));
+    });
+  });
+
+  group('BasePathConfig (ProxyPass support)', () {
+    test('normalizes various BASE_PATH inputs cleanly', () {
+      expect(BasePathConfig.normalize(null), equals(''));
+      expect(BasePathConfig.normalize(''), equals(''));
+      expect(BasePathConfig.normalize('/'), equals(''));
+      expect(BasePathConfig.normalize('livebox'), equals('/livebox'));
+      expect(BasePathConfig.normalize('/livebox/'), equals('/livebox'));
+      expect(BasePathConfig.normalize('//tools//livebox///'), equals('/tools/livebox'));
+    });
+
+    test('rewrites index.html asset URLs and injects __LBM_BASE_PATH__', () {
+      final cfg = BasePathConfig.fromRaw('/livebox/');
+      const sample = '''
+<head>
+  <link rel="icon" href="/favicon.png" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body><img src="/favicon.png" /><script src="/app.js"></script></body>
+''';
+      final rewritten = cfg.rewriteIndexHtml(sample);
+      expect(rewritten, contains('window.__LBM_BASE_PATH__="/livebox";'));
+      expect(rewritten, contains('href="/livebox/styles.css"'));
+      expect(rewritten, contains('src="/livebox/app.js"'));
+      expect(rewritten, contains('href="/livebox/favicon.png"'));
+      expect(rewritten, contains('src="/livebox/favicon.png"'));
+    });
+
+    test('stripPrefixMiddleware handles exact prefix, nested routes, and already-stripped passthrough',
+        () async {
+      final cfg = BasePathConfig.fromRaw('/tools/livebox');
+      final handler = cfg.buildShelfMiddleware()(
+        (shelf.Request req) => shelf.Response.ok('/${req.url.path}'),
+      );
+
+      final r1 = await handler(
+        shelf.Request('GET', Uri.parse('http://localhost/tools/livebox')),
+      );
+      expect(await r1.readAsString(), equals('/'));
+
+      final r2 = await handler(
+        shelf.Request('GET', Uri.parse('http://localhost/tools/livebox/api/health')),
+      );
+      expect(await r2.readAsString(), equals('/api/health'));
+
+      // Already-stripped ProxyPass or internal Docker health check passes through
+      final r3 = await handler(
+        shelf.Request('GET', Uri.parse('http://localhost/api/health')),
+      );
+      expect(await r3.readAsString(), equals('/api/health'));
     });
   });
 }

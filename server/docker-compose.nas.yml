@@ -17,6 +17,8 @@ services:
       PORT: 8080
       DATA_DIR: /data
       TZ: Europe/Paris
+      # Optionnel : sous-chemin pour exposition derrière un reverse proxy / ProxyPass (ex. /livebox)
+      BASE_PATH: ${BASE_PATH:-}
       # Optionnel : pré-configuration au 1er démarrage (sinon tout se règle dans l'IHM Web)
       LIVEBOX_URL: ${LIVEBOX_URL:-http://192.168.1.1/}
       LIVEBOX_USER: ${LIVEBOX_USER:-admin}

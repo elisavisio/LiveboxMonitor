@@ -69,6 +69,32 @@ docker compose --profile mail-test up -d --build
    - Cliquez **Enregistrer SMTP**, puis **Envoyer un email de test** (ou **+ Simuler nouvel appareil** en Mode Démo).
 2. Consultez les emails reçus dans l'interface Mailpit sur `http://localhost:8025`.
 
+## Exposer derrière un Reverse Proxy / ProxyPass (`BASE_PATH`)
+
+Définissez la variable d'environnement `BASE_PATH=/livebox` (et `DASHBOARD_URL=https://mpontigg.ovh/livebox` pour les liens dans les alertes email). Le serveur gère automatiquement les **deux** modes de ProxyPass (avec ou sans suppression du préfixe).
+
+### Exemple Nginx (avec support temps réel SSE)
+```nginx
+location /livebox/ {
+    proxy_pass http://127.0.0.1:8090/livebox/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # Important pour le flux temps réel Server-Sent Events (/api/stream)
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+}
+```
+
+### Exemple Apache (`ProxyPass`)
+```apache
+ProxyPass        /livebox  http://127.0.0.1:8090/livebox  flushpackets=on
+ProxyPassReverse /livebox  http://127.0.0.1:8090/livebox
+```
+
 ## Développement local (sans Docker)
 
 ```bash

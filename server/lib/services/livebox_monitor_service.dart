@@ -26,7 +26,7 @@ class _ByteCounter {
 /// - Maintains Livebox -> Repeaters -> Eth/Wi-Fi -> Devices topology tree.
 /// - Dispatches SMTP alerts whenever a new unknown device joins the network.
 class LiveboxMonitorService {
-  static const String appVersion = '1.1.2';
+  static const String appVersion = '1.1.3';
 
   static final RegExp _macPattern =
       RegExp(r'([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})');

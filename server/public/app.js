@@ -96,8 +96,10 @@
     setTimeout(() => el.remove(), 5500);
   }
 
+  const BASE_PATH = String(window.__LBM_BASE_PATH__ || '').replace(/\/+$/, '');
+
   async function api(path, options = {}) {
-    const res = await fetch(path, {
+    const res = await fetch(`${BASE_PATH}${path}`, {
       headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
       ...options,
     });
@@ -925,7 +927,7 @@
   function connectSse() {
     if (state.sse) state.sse.close();
     const badge = $('sse-badge');
-    const es = new EventSource('/api/stream');
+    const es = new EventSource(`${BASE_PATH}/api/stream`);
     state.sse = es;
 
     es.onopen = () => {

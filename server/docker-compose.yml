@@ -10,6 +10,8 @@ services:
     environment:
       PORT: 8080
       DATA_DIR: /data
+      # Optionnel : sous-chemin pour exposition derrière un reverse proxy / ProxyPass (ex. /livebox)
+      BASE_PATH: ${BASE_PATH:-}
       # Optionnel : pré-remplissage au 1er démarrage (sinon configurable via l'IHM Web et chiffré en AES-256-GCM)
       LIVEBOX_URL: ${LIVEBOX_URL:-http://livebox.home/}
       LIVEBOX_USER: ${LIVEBOX_USER:-admin}
