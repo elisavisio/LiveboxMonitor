@@ -26,12 +26,18 @@ class ReadOnlyLiveboxClient {
   ReadOnlyLiveboxClient(this._session);
 
   bool get isAuthenticated => _session.isAuthenticated;
+  int get channelId => _session.channelId;
   List<String> get debugLogs => _session.debugLogs;
   String? get lastErrorDetail => _session.lastErrorDetail;
   String get baseUrl => _session.baseUrl;
 
   Future<int> signIn(String user, String password) =>
       _session.signIn(user, password);
+
+  Future<bool> checkSession({Duration timeout = LiveboxSession.defaultTimeout}) =>
+      _session.checkSession(timeout: timeout);
+
+  void resetEventChannel() => _session.resetEventChannel();
 
   Future<void> close() => _session.close();
 

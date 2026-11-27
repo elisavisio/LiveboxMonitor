@@ -16,13 +16,17 @@ Response onRequest(RequestContext context) {
 
   void emit(String eventName, Object payload) {
     if (controller.isClosed) return;
-    final frame = 'event: $eventName\ndata: ${jsonEncode(payload)}\n\n';
-    controller.add(utf8.encode(frame));
+    try {
+      final frame = 'event: $eventName\ndata: ${jsonEncode(payload)}\n\n';
+      controller.add(utf8.encode(frame));
+    } catch (_) {}
   }
 
   controller = StreamController<List<int>>(
     onListen: () {
-      controller.add(utf8.encode(': connected\n\n'));
+      try {
+        controller.add(utf8.encode(': connected\n\n'));
+      } catch (_) {}
       emit('overview', service.getOverview());
 
       sub = service.sseEvents.listen((ev) {
@@ -33,7 +37,9 @@ Response onRequest(RequestContext context) {
 
       pingTimer = Timer.periodic(const Duration(seconds: 20), (_) {
         if (!controller.isClosed) {
-          controller.add(utf8.encode(': ping\n\n'));
+          try {
+            controller.add(utf8.encode(': ping\n\n'));
+          } catch (_) {}
         }
       });
     },

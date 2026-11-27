@@ -35,6 +35,7 @@ class LiveboxSession {
   int _channelId = 0;
   String _user = '';
   String _password = '';
+  Future<int>? _inFlightSignIn;
 
   final List<String> _debugLogs = [];
   String? _lastErrorDetail;
@@ -52,8 +53,15 @@ class LiveboxSession {
   }) : baseUrl = '${url.trim().replaceAll(RegExp(r'/+$'), '')}/';
 
   bool get isAuthenticated => _contextId != null && _client != null;
+  int get channelId => _channelId;
   List<String> get debugLogs => List.unmodifiable(_debugLogs);
   String? get lastErrorDetail => _lastErrorDetail;
+
+  /// Resets the Livebox event channel ID so the next [eventRequest] opens a
+  /// fresh event subscription on the Livebox.
+  void resetEventChannel() {
+    _channelId = 0;
+  }
 
   Future<T> _withThrottle<T>(Future<T> Function() action) async {
     if (_inFlight >= _maxConcurrentRequests) {
@@ -106,7 +114,20 @@ class LiveboxSession {
 
   /// Signs in to the Livebox.
   /// Returns `1` on success, `0` on bad credentials, `-1` on connectivity error.
-  Future<int> signIn(String user, String password) async {
+  Future<int> signIn(String user, String password) {
+    final existing = _inFlightSignIn;
+    if (existing != null) return existing;
+    final future = _performSignIn(user, password);
+    _inFlightSignIn = future;
+    future.whenComplete(() {
+      if (identical(_inFlightSignIn, future)) {
+        _inFlightSignIn = null;
+      }
+    });
+    return future;
+  }
+
+  Future<int> _performSignIn(String user, String password) async {
     await close();
     _debugLogs.clear();
     _lastErrorDetail = null;
@@ -338,6 +359,43 @@ class LiveboxSession {
     return status;
   }
 
+  /// Verifies that the current Livebox session is still valid using the
+  /// strictly read-only `Time:getTime` call.
+  Future<bool> checkSession({Duration timeout = defaultTimeout}) async {
+    if (!isAuthenticated) return false;
+    try {
+      final res = await _postRawWithStatus(
+        '${baseUrl}ws',
+        body: '{"service":"Time","method":"getTime","parameters":{}}',
+        headers: _serviceHeaders,
+        timeout: timeout,
+        maxAttempts: 1,
+      );
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        _log('checkSession HTTP ${res.statusCode} (session expired)');
+        return false;
+      }
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        _log('checkSession HTTP ${res.statusCode}');
+        return false;
+      }
+      final decoded = jsonDecode(res.body);
+      if (decoded is Map) {
+        final ok = decoded['status'] == true ||
+            (decoded['result'] is Map &&
+                (decoded['result'] as Map)['status'] == true);
+        if (!ok) {
+          _log('checkSession returned non-true status: ${res.body}');
+        }
+        return ok;
+      }
+      return false;
+    } catch (e) {
+      _log('checkSession error: $e');
+      return false;
+    }
+  }
+
   /// Polls the Livebox event channel (`POST /ws` with event content type).
   Future<Map<String, dynamic>?> eventRequest(
     List<String> events, {
@@ -349,13 +407,30 @@ class LiveboxSession {
       if (_channelId != 0) 'channelid': _channelId,
     };
     try {
-      var raw = await _postRaw(
+      final res = await _postRawWithStatus(
         '${baseUrl}ws',
         body: jsonEncode(payload),
         headers: _eventHeaders,
         timeout: timeout,
         maxAttempts: 1,
       );
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        _log(
+          'Event channel HTTP ${res.statusCode}; resetting channel and re-authenticating session',
+        );
+        _channelId = 0;
+        if (_user.isNotEmpty) {
+          await signIn(_user, _password);
+        }
+        return null;
+      }
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        _log('Event channel unexpected HTTP ${res.statusCode}');
+        _channelId = 0;
+        return null;
+      }
+
+      var raw = res.body;
       if (raw.endsWith('null')) {
         raw = raw.substring(0, raw.length - 4);
       }
@@ -363,6 +438,7 @@ class LiveboxSession {
         return <String, dynamic>{
           'channelid': _channelId,
           'events': const <dynamic>[],
+          'empty': true,
         };
       }
       var decoded = jsonDecode(raw);
@@ -370,18 +446,34 @@ class LiveboxSession {
         if (decoded['result'] is Map<String, dynamic>) {
           decoded = decoded['result'] as Map<String, dynamic>;
         }
-        if (decoded['errors'] != null && _user.isNotEmpty) {
-          // Session likely timed out on Livebox side; re-authenticate cleanly
-          _log('Event channel reported errors; re-authenticating session');
-          await signIn(_user, _password);
+        if (_hasApiErrors(decoded)) {
+          final errDetail = _extractErrors(decoded) ?? decoded.toString();
+          _log(
+            'Event channel reported error ($errDetail); resetting channel and re-authenticating session',
+          );
+          _channelId = 0;
+          if (_user.isNotEmpty) {
+            await signIn(_user, _password);
+          }
           return null;
         }
         final ch = decoded['channelid'];
-        if (ch is int) _channelId = ch;
+        if (ch is int) {
+          _channelId = ch;
+        } else if (ch is num) {
+          _channelId = ch.toInt();
+        } else if (ch is String) {
+          _channelId = int.tryParse(ch) ?? 0;
+        } else {
+          // Match LmSession.py: if reply omitted channelid, renew subscription
+          _channelId = 0;
+        }
         return decoded;
       }
     } on TimeoutException {
-      // Normal when no Livebox event occurs within the long-poll window
+      // Normal when no Livebox event occurs within the long-poll window.
+      // Underlying HttpClientRequest was already aborted in _executeHttp so
+      // no socket or connection-pool slot is leaked.
       return <String, dynamic>{
         'channelid': _channelId,
         'events': const <dynamic>[],
@@ -391,6 +483,14 @@ class LiveboxSession {
       _log('eventRequest error: $e');
     }
     return null;
+  }
+
+  bool _hasApiErrors(Map<String, dynamic> reply) {
+    final errors = reply['errors'];
+    if (errors is List && errors.isNotEmpty) return true;
+    if (errors != null && errors is! List) return true;
+    if (reply['error'] != null) return true;
+    return false;
   }
 
   String? _extractErrors(Map<String, dynamic> reply) {
@@ -415,81 +515,242 @@ class LiveboxSession {
     required Duration timeout,
     String? logStep,
     int maxAttempts = 2,
-  }) {
-    return _withThrottle(() async {
-      for (int attempt = 0; attempt < maxAttempts; attempt++) {
-        try {
-          final client = _client ?? _createClient();
-          final uri = Uri.parse(url);
-          final req = await client.postUrl(uri).timeout(timeout);
-          headers.forEach((k, v) => req.headers.set(k, v));
-          if (attempt > 0) {
-            req.headers.set(HttpHeaders.connectionHeader, 'close');
-          }
-          _attachCookies(req);
-          final bytes = utf8.encode(body);
-          req.headers.contentLength = bytes.length;
-          req.add(bytes);
-          final resp = await req.close().timeout(timeout);
-          _storeRawCookies(resp.headers[HttpHeaders.setCookieHeader], logStep: logStep);
-          if (logStep != null) {
-            _log('$logStep HTTP ${resp.statusCode} ${resp.reasonPhrase} (cookies=${_rawCookies.length})');
-          }
-          final respBytes = await resp
-              .fold<List<int>>([], (acc, chunk) => acc..addAll(chunk))
-              .timeout(timeout);
-          return utf8.decode(respBytes, allowMalformed: true);
-        } on HttpException catch (e) {
-          if (attempt == 0) {
-            _log('Transient HttpException (${e.message}) on ${logStep ?? url}, retrying...');
-            await Future<void>.delayed(const Duration(milliseconds: 140));
-            continue;
-          }
-          rethrow;
-        } on SocketException catch (e) {
-          if (attempt == 0 && logStep != 'createContext') {
-            _log('Transient SocketException (${e.message}) on ${logStep ?? url}, retrying...');
-            await Future<void>.delayed(const Duration(milliseconds: 140));
-            continue;
-          }
-          rethrow;
-        }
-      }
-      throw LiveboxApiException('Request failed after retry');
-    });
+  }) async {
+    final res = await _postRawWithStatus(
+      url,
+      body: body,
+      headers: headers,
+      timeout: timeout,
+      logStep: logStep,
+      maxAttempts: maxAttempts,
+    );
+    return res.body;
   }
+
+  Future<({int statusCode, String body})> _postRawWithStatus(
+    String url, {
+    required String body,
+    required Map<String, String> headers,
+    required Duration timeout,
+    String? logStep,
+    int maxAttempts = 2,
+  }) =>
+      _executeHttp(
+        method: 'POST',
+        url: url,
+        body: body,
+        headers: headers,
+        timeout: timeout,
+        logStep: logStep,
+        maxAttempts: maxAttempts,
+      );
 
   Future<String> _getRaw(
     String url, {
     required Map<String, String> headers,
     required Duration timeout,
+  }) async {
+    final res = await _executeHttp(
+      method: 'GET',
+      url: url,
+      headers: headers,
+      timeout: timeout,
+      maxAttempts: 2,
+    );
+    return res.body;
+  }
+
+  Duration _remainingTimeout(Stopwatch sw, Duration total) {
+    final rem = total - sw.elapsed;
+    if (rem <= Duration.zero) {
+      throw TimeoutException('HTTP request timeout', total);
+    }
+    return rem;
+  }
+
+  Future<List<int>> _readResponseBytes(
+    HttpClientRequest req,
+    HttpClientResponse resp,
+    Duration timeout,
+  ) {
+    if (timeout <= Duration.zero) {
+      try {
+        req.abort();
+      } catch (_) {}
+      unawaited(resp.drain<void>().catchError((_) {}));
+      return Future<List<int>>.error(
+        TimeoutException('HTTP response body timeout', timeout),
+      );
+    }
+
+    final completer = Completer<List<int>>();
+    final chunks = <int>[];
+    late final StreamSubscription<List<int>> sub;
+    Timer? timer;
+
+    timer = Timer(timeout, () {
+      if (completer.isCompleted) return;
+      try {
+        req.abort();
+      } catch (_) {}
+      unawaited(sub.cancel().catchError((_) {}));
+      completer.completeError(
+        TimeoutException('HTTP response body timeout', timeout),
+      );
+    });
+
+    sub = resp.listen(
+      chunks.addAll,
+      onDone: () {
+        timer?.cancel();
+        if (!completer.isCompleted) {
+          completer.complete(chunks);
+        }
+      },
+      onError: (Object err, StackTrace st) {
+        timer?.cancel();
+        if (!completer.isCompleted) {
+          completer.completeError(err, st);
+        }
+      },
+      cancelOnError: true,
+    );
+
+    return completer.future;
+  }
+
+  Future<({int statusCode, String body})> _executeHttp({
+    required String method,
+    required String url,
+    required Map<String, String> headers,
+    required Duration timeout,
+    String? body,
+    String? logStep,
+    int maxAttempts = 2,
   }) {
     return _withThrottle(() async {
-      for (int attempt = 0; attempt < 2; attempt++) {
+      for (int attempt = 0; attempt < maxAttempts; attempt++) {
+        HttpClientRequest? req;
+        HttpClientResponse? resp;
+        var respListened = false;
         try {
+          final sw = Stopwatch()..start();
           final client = _client ?? _createClient();
-          final req = await client.getUrl(Uri.parse(url)).timeout(timeout);
-          headers.forEach((k, v) => req.headers.set(k, v));
+          final uri = Uri.parse(url);
+
+          final reqFuture =
+              method == 'POST' ? client.postUrl(uri) : client.getUrl(uri);
+          req = await reqFuture.timeout(
+            _remainingTimeout(sw, timeout),
+            onTimeout: () {
+              unawaited(
+                reqFuture.then(
+                  (lateReq) {
+                    try {
+                      lateReq.abort();
+                    } catch (_) {}
+                  },
+                  onError: (_) {},
+                ),
+              );
+              throw TimeoutException('HTTP $method openUrl timeout', timeout);
+            },
+          );
+
+          headers.forEach((k, v) => req!.headers.set(k, v));
           if (attempt > 0) {
             req.headers.set(HttpHeaders.connectionHeader, 'close');
           }
           _attachCookies(req);
-          final resp = await req.close().timeout(timeout);
-          _storeRawCookies(resp.headers[HttpHeaders.setCookieHeader]);
-          final respBytes = await resp
-              .fold<List<int>>([], (acc, chunk) => acc..addAll(chunk))
-              .timeout(timeout);
-          return utf8.decode(respBytes, allowMalformed: true);
+
+          if (body != null) {
+            final bytes = utf8.encode(body);
+            req.headers.contentLength = bytes.length;
+            req.add(bytes);
+          }
+
+          final activeReq = req;
+          final respFuture = activeReq.close();
+          resp = await respFuture.timeout(
+            _remainingTimeout(sw, timeout),
+            onTimeout: () {
+              try {
+                activeReq.abort();
+              } catch (_) {}
+              unawaited(
+                respFuture.then(
+                  (lateResp) => lateResp.drain<void>().catchError((_) {}),
+                  onError: (_) {},
+                ),
+              );
+              throw TimeoutException('HTTP $method response timeout', timeout);
+            },
+          );
+
+          _storeRawCookies(
+            resp.headers[HttpHeaders.setCookieHeader],
+            logStep: logStep,
+          );
+          if (logStep != null) {
+            _log(
+              '$logStep HTTP ${resp.statusCode} ${resp.reasonPhrase} (cookies=${_rawCookies.length})',
+            );
+          }
+
+          final remainingForBody = timeout - sw.elapsed;
+          respListened = true;
+          final respBytes = await _readResponseBytes(
+            activeReq,
+            resp,
+            remainingForBody,
+          );
+          return (
+            statusCode: resp.statusCode,
+            body: utf8.decode(respBytes, allowMalformed: true),
+          );
+        } on TimeoutException {
+          if (req != null) {
+            try {
+              req.abort();
+            } catch (_) {}
+          }
+          if (resp != null && !respListened) {
+            try {
+              unawaited(resp.drain<void>().catchError((_) {}));
+            } catch (_) {}
+          }
+          rethrow;
         } on HttpException catch (e) {
-          if (attempt == 0) {
-            _log('Transient GET HttpException (${e.message}), retrying...');
+          if (req != null) {
+            try {
+              req.abort();
+            } catch (_) {}
+          }
+          if (attempt + 1 < maxAttempts) {
+            _log(
+              'Transient $method HttpException (${e.message}) on ${logStep ?? url}, retrying...',
+            );
+            await Future<void>.delayed(const Duration(milliseconds: 140));
+            continue;
+          }
+          rethrow;
+        } on SocketException catch (e) {
+          if (req != null) {
+            try {
+              req.abort();
+            } catch (_) {}
+          }
+          if (attempt + 1 < maxAttempts && logStep != 'createContext') {
+            _log(
+              'Transient $method SocketException (${e.message}) on ${logStep ?? url}, retrying...',
+            );
             await Future<void>.delayed(const Duration(milliseconds: 140));
             continue;
           }
           rethrow;
         }
       }
-      throw LiveboxApiException('GET request failed after retry');
+      throw LiveboxApiException('$method request failed after retry');
     });
   }
 

@@ -26,7 +26,7 @@ class _ByteCounter {
 /// - Maintains Livebox -> Repeaters -> Eth/Wi-Fi -> Devices topology tree.
 /// - Dispatches SMTP alerts whenever a new unknown device joins the network.
 class LiveboxMonitorService {
-  static const String appVersion = '1.1.3';
+  static const String appVersion = '1.1.4';
 
   static final RegExp _macPattern =
       RegExp(r'([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})');
@@ -49,6 +49,7 @@ class LiveboxMonitorService {
   final SecretVault vault;
   final EmailNotifier emailNotifier;
   final String? dashboardUrl;
+  final Duration eventWatchdogInterval;
 
   ReadOnlyLiveboxClient? _client;
   LiveboxCredentials _liveboxConfig = const LiveboxCredentials(
@@ -62,6 +63,8 @@ class LiveboxMonitorService {
   bool _connected = false;
   bool _demoMode = false;
   bool _initialSeedComplete = false;
+  bool _wifiStatsPolling = false;
+  bool _topologyRefreshing = false;
   String _statusMessage = 'Initialisation...';
   String _liveboxModel = 'Livebox';
   String _liveboxIp = '';
@@ -96,6 +99,7 @@ class LiveboxMonitorService {
     required this.vault,
     EmailNotifier? emailNotifier,
     this.dashboardUrl,
+    this.eventWatchdogInterval = const Duration(minutes: 2),
   })  : _liveDb = db,
         emailNotifier = emailNotifier ?? EmailNotifier();
 
@@ -189,6 +193,8 @@ class LiveboxMonitorService {
     _demoTimer = null;
     _connected = false;
     _initialSeedComplete = false;
+    _wifiStatsPolling = false;
+    _topologyRefreshing = false;
     _cachedTopology = null;
     _liveboxModel = 'Livebox';
     _liveboxIp = '';
@@ -309,6 +315,11 @@ class LiveboxMonitorService {
 
         // 3. Main Livebox event loop (Devices.Device + HomeLan)
         int consecutiveFailures = 0;
+        int consecutiveNoChannelTimeouts = 0;
+        var lastEventActivityMs = DateTime.now().millisecondsSinceEpoch;
+        var lastWatchdogCheckMs = lastEventActivityMs;
+        final watchdogMs = eventWatchdogInterval.inMilliseconds;
+
         while (_running && epoch == _loopEpoch && !_demoMode) {
           final payload = await client.pollEvents(
             events: const ['Devices.Device', 'HomeLan'],
@@ -318,6 +329,11 @@ class LiveboxMonitorService {
 
           if (payload == null) {
             consecutiveFailures++;
+            if (consecutiveFailures == 1 || consecutiveFailures >= 8) {
+              stdout.writeln(
+                '[LiveboxMonitorServer] Event poll failed ($consecutiveFailures/8)',
+              );
+            }
             if (consecutiveFailures >= 8) {
               throw Exception('Perte du flux d\'événements Livebox');
             }
@@ -326,23 +342,62 @@ class LiveboxMonitorService {
           }
 
           consecutiveFailures = 0;
+          final isTimeout = payload['timeout'] == true;
+          if (isTimeout && client.channelId == 0) {
+            consecutiveNoChannelTimeouts++;
+            if (consecutiveNoChannelTimeouts >= 5) {
+              stdout.writeln(
+                '[LiveboxMonitorServer] Event channel failed to initialize after $consecutiveNoChannelTimeouts timeouts — checking session',
+              );
+              consecutiveNoChannelTimeouts = 0;
+              final alive = await client.checkSession();
+              if (!alive) {
+                throw Exception('Session Livebox expirée ou injoignable');
+              }
+            }
+          } else if (!isTimeout) {
+            consecutiveNoChannelTimeouts = 0;
+          }
+
           final rawEvents = payload['events'];
+          final nowMs = DateTime.now().millisecondsSinceEpoch;
           if (rawEvents is List && rawEvents.isNotEmpty) {
+            lastEventActivityMs = nowMs;
+            lastWatchdogCheckMs = nowMs;
             for (final ev in rawEvents) {
               if (ev is Map) {
                 await _handleLiveboxEvent(Map<String, dynamic>.from(ev));
               }
             }
+          } else if (watchdogMs > 0 &&
+              (nowMs - lastEventActivityMs) >= watchdogMs &&
+              (nowMs - lastWatchdogCheckMs) >= watchdogMs) {
+            lastWatchdogCheckMs = nowMs;
+            final silentSec = (nowMs - lastEventActivityMs) ~/ 1000;
+            stdout.writeln(
+              '[LiveboxMonitorServer] No Livebox events for ${silentSec}s — verifying session & renewing event channel',
+            );
+            final alive = await client.checkSession();
+            if (epoch != _loopEpoch || !_running) break;
+            if (!alive) {
+              throw Exception('Session Livebox expirée ou injoignable (watchdog)');
+            }
+            client.resetEventChannel();
           }
           await Future<void>.delayed(const Duration(milliseconds: 700));
         }
       } catch (e) {
         if (epoch != _loopEpoch || !_running) return;
+        stdout.writeln(
+          '[LiveboxMonitorServer] Event loop interrupted: $e — reconnecting in 8s',
+        );
         _connected = false;
         _statusMessage = 'Reconnexion en cours ($e)...';
         _broadcast('status', _statusPayload());
         _statsTimer?.cancel();
         _topologyTimer?.cancel();
+        _wifiStatsPolling = false;
+        _topologyRefreshing = false;
         try {
           await _client?.close();
         } catch (_) {}
@@ -827,65 +882,76 @@ class LiveboxMonitorService {
     ReadOnlyLiveboxClient client,
     int epoch,
   ) async {
-    if (!_running || epoch != _loopEpoch || !_connected || _demoMode) return;
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final aggregated =
-        <String, ({double rxBps, double txBps, int rxBytes, int txBytes, bool hasRate})>{};
+    if (!_running ||
+        epoch != _loopEpoch ||
+        !_connected ||
+        _demoMode ||
+        _wifiStatsPolling) {
+      return;
+    }
+    _wifiStatsPolling = true;
+    try {
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      final aggregated =
+          <String, ({double rxBps, double txBps, int rxBytes, int txBytes, bool hasRate})>{};
 
-    for (final intf in List<String>.from(_wifiIntfKeys)) {
-      if (epoch != _loopEpoch) return;
-      try {
-        final stations = await client.getWifiStationStats(intf);
-        for (final st in stations) {
-          final mac = (st['MACAddress']?.toString() ??
-                  st['PhysAddress']?.toString() ??
-                  st['Key']?.toString() ??
-                  '')
-              .toUpperCase();
-          if (!_macPattern.hasMatch(mac)) continue;
-          // Router TxBytes = device Download (Rx), Router RxBytes = device Upload (Tx)
-          final routerTx = (st['TxBytes'] as num?)?.toInt();
-          final routerRx = (st['RxBytes'] as num?)?.toInt();
-          if (routerTx != null && routerRx != null) {
-            final rates = _recordByteCounter(
-              mac,
-              counterKey: 'wifi:${intf}_$mac',
-              rxBytes: routerTx,
-              txBytes: routerRx,
-              tsMs: nowMs,
-              persistToDb: false,
-            );
-            final prevAgg = aggregated[mac];
-            aggregated[mac] = (
-              rxBps: (prevAgg?.rxBps ?? 0) + (rates?.rxBps ?? 0),
-              txBps: (prevAgg?.txBps ?? 0) + (rates?.txBps ?? 0),
-              rxBytes: max(prevAgg?.rxBytes ?? 0, routerTx),
-              txBytes: max(prevAgg?.txBytes ?? 0, routerRx),
-              hasRate: (prevAgg?.hasRate ?? false) || rates != null,
-            );
+      for (final intf in List<String>.from(_wifiIntfKeys)) {
+        if (epoch != _loopEpoch) return;
+        try {
+          final stations = await client.getWifiStationStats(intf);
+          for (final st in stations) {
+            final mac = (st['MACAddress']?.toString() ??
+                    st['PhysAddress']?.toString() ??
+                    st['Key']?.toString() ??
+                    '')
+                .toUpperCase();
+            if (!_macPattern.hasMatch(mac)) continue;
+            // Router TxBytes = device Download (Rx), Router RxBytes = device Upload (Tx)
+            final routerTx = (st['TxBytes'] as num?)?.toInt();
+            final routerRx = (st['RxBytes'] as num?)?.toInt();
+            if (routerTx != null && routerRx != null) {
+              final rates = _recordByteCounter(
+                mac,
+                counterKey: 'wifi:${intf}_$mac',
+                rxBytes: routerTx,
+                txBytes: routerRx,
+                tsMs: nowMs,
+                persistToDb: false,
+              );
+              final prevAgg = aggregated[mac];
+              aggregated[mac] = (
+                rxBps: (prevAgg?.rxBps ?? 0) + (rates?.rxBps ?? 0),
+                txBps: (prevAgg?.txBps ?? 0) + (rates?.txBps ?? 0),
+                rxBytes: max(prevAgg?.rxBytes ?? 0, routerTx),
+                txBytes: max(prevAgg?.txBytes ?? 0, routerRx),
+                hasRate: (prevAgg?.hasRate ?? false) || rates != null,
+              );
+            }
           }
-        }
-      } catch (_) {}
-    }
+        } catch (_) {}
+      }
 
-    bool anyUpdated = false;
-    for (final entry in aggregated.entries) {
-      final mac = entry.key;
-      final agg = entry.value;
-      if (!agg.hasRate) continue;
-      recordWifiStationSample(
-        mac: mac,
-        rxBytes: agg.rxBytes,
-        txBytes: agg.txBytes,
-        rxBytesPerSec: agg.rxBps,
-        txBytesPerSec: agg.txBps,
-        tsMs: nowMs,
-      );
-      anyUpdated = true;
-    }
+      bool anyUpdated = false;
+      for (final entry in aggregated.entries) {
+        final mac = entry.key;
+        final agg = entry.value;
+        if (!agg.hasRate) continue;
+        recordWifiStationSample(
+          mac: mac,
+          rxBytes: agg.rxBytes,
+          txBytes: agg.txBytes,
+          rxBytesPerSec: agg.rxBps,
+          txBytesPerSec: agg.txBps,
+          tsMs: nowMs,
+        );
+        anyUpdated = true;
+      }
 
-    if (anyUpdated) {
-      _broadcast('overview', getOverview());
+      if (anyUpdated) {
+        _broadcast('overview', getOverview());
+      }
+    } finally {
+      _wifiStatsPolling = false;
     }
   }
 
@@ -973,21 +1039,32 @@ class LiveboxMonitorService {
     int epoch, {
     bool prune = true,
   }) async {
-    if (!_running || epoch != _loopEpoch || !_connected || _demoMode) return;
+    if (!_running ||
+        epoch != _loopEpoch ||
+        !_connected ||
+        _demoMode ||
+        _topologyRefreshing) {
+      return;
+    }
+    _topologyRefreshing = true;
     try {
-      final rawTopo = await client.getTopology();
-      if (rawTopo.isNotEmpty) {
-        _cachedTopology = LiveboxTopologyParser.parseFromTopology(
-          rawTopology: rawTopo,
-          liveboxModel: _liveboxModel,
-          liveboxIp: _liveboxIp,
-          liveboxMac: _liveboxMac,
-        );
-        _broadcast('topology', getTopology());
+      try {
+        final rawTopo = await client.getTopology();
+        if (rawTopo.isNotEmpty) {
+          _cachedTopology = LiveboxTopologyParser.parseFromTopology(
+            rawTopology: rawTopo,
+            liveboxModel: _liveboxModel,
+            liveboxIp: _liveboxIp,
+            liveboxMac: _liveboxMac,
+          );
+          _broadcast('topology', getTopology());
+        }
+      } catch (_) {}
+      if (prune) {
+        db.pruneOldHistory(retentionDays: 7);
       }
-    } catch (_) {}
-    if (prune) {
-      db.pruneOldHistory(retentionDays: 7);
+    } finally {
+      _topologyRefreshing = false;
     }
   }
 

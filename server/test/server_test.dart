@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:livebox_client/livebox_client.dart';
@@ -581,6 +583,289 @@ void main() {
         shelf.Request('GET', Uri.parse('http://localhost/api/health')),
       );
       expect(await r3.readAsString(), equals('/api/health'));
+    });
+  });
+
+  group('LiveboxSession event polling resilience', () {
+    test('consecutive long-poll timeouts do not deadlock HttpClient connection pool',
+        () async {
+      int eventPollCount = 0;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+
+      server.listen((req) async {
+        final body = await utf8.decoder.bind(req).join();
+        final decoded = jsonDecode(body) as Map<String, dynamic>;
+
+        if (decoded['method'] == 'createContext') {
+          req.response.write(jsonEncode({
+            'status': 0,
+            'data': {'contextID': 'ctx_timeout_test'},
+          }));
+          await req.response.close();
+          return;
+        }
+        if (decoded['method'] == 'getTime') {
+          req.response.write(jsonEncode({'status': true}));
+          await req.response.close();
+          return;
+        }
+        if (decoded.containsKey('events')) {
+          final n = ++eventPollCount;
+          if (n <= 3) {
+            // Simulate Livebox long-poll taking longer than client timeout
+            await Future<void>.delayed(const Duration(milliseconds: 500));
+            try {
+              req.response.write(jsonEncode({
+                'channelid': 7,
+                'events': <dynamic>[],
+              }));
+              await req.response.close();
+            } catch (_) {}
+            return;
+          }
+          // 4th poll returns an event immediately (would never be reached if pool leaked!)
+          req.response.write(
+            '${jsonEncode({
+              'channelid': 7,
+              'events': [
+                {
+                  'data': {
+                    'handler': 'HomeLan.Interface.eth0.Stats',
+                    'object': {'reason': 'changed', 'attributes': {'BytesReceived': 1234}},
+                  },
+                },
+              ],
+            })}null',
+          );
+          await req.response.close();
+          return;
+        }
+        req.response.write(jsonEncode({'status': true}));
+        await req.response.close();
+      });
+
+      final session = LiveboxSession('http://127.0.0.1:${server.port}/');
+      addTearDown(session.close);
+
+      expect(await session.signIn('admin', 'secret'), equals(1));
+
+      // Trigger 3 consecutive timeouts (> maxConnectionsPerHost = 2)
+      for (int i = 0; i < 3; i++) {
+        final res = await session.eventRequest(
+          const ['Devices.Device', 'HomeLan'],
+          timeout: const Duration(milliseconds: 200),
+        );
+        expect(res, isNotNull);
+        expect(res!['timeout'], isTrue);
+      }
+
+      // 4th poll MUST reach the server and receive the live event
+      final fourth = await session.eventRequest(
+        const ['Devices.Device', 'HomeLan'],
+        timeout: const Duration(seconds: 2),
+      );
+      expect(eventPollCount, equals(4));
+      expect(fourth, isNotNull);
+      expect(fourth!['timeout'], isNot(isTrue));
+      expect((fourth['events'] as List).length, equals(1));
+      expect(session.channelId, equals(7));
+
+      // Regular RPC checkSession must also succeed immediately
+      expect(await session.checkSession(), isTrue);
+    });
+
+    test('recovers from HTTP 401, singular error payload, and missing channelid',
+        () async {
+      int authCount = 0;
+      int eventCall = 0;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+
+      server.listen((req) async {
+        final body = await utf8.decoder.bind(req).join();
+        final decoded = jsonDecode(body) as Map<String, dynamic>;
+
+        if (decoded['method'] == 'createContext') {
+          authCount++;
+          req.response.write(jsonEncode({
+            'status': 0,
+            'data': {'contextID': 'ctx_$authCount'},
+          }));
+          await req.response.close();
+          return;
+        }
+        if (decoded['method'] == 'getTime') {
+          req.response.write(jsonEncode({'status': true}));
+          await req.response.close();
+          return;
+        }
+        if (decoded.containsKey('events')) {
+          eventCall++;
+          if (eventCall == 1) {
+            req.response.write(jsonEncode({'channelid': 42, 'events': <dynamic>[]}));
+          } else if (eventCall == 2) {
+            // Simulate Livebox omitting channelid -> must reset channelId to 0
+            req.response.write(jsonEncode({'events': <dynamic>[]}));
+          } else if (eventCall == 3) {
+            // Simulate HTTP 401 Unauthorized -> must re-authenticate
+            req.response.statusCode = 401;
+            req.response.write('null');
+          } else if (eventCall == 4) {
+            // Simulate singular error object -> must re-authenticate
+            req.response.write(jsonEncode({'error': 13, 'description': 'Permission denied'}));
+          } else {
+            req.response.write(jsonEncode({
+              'channelid': 99,
+              'events': [
+                {'data': {'handler': 'HomeLan.Interface.eth0.Stats', 'object': {'reason': 'changed', 'attributes': <String, dynamic>{}}}},
+              ],
+            }));
+          }
+          await req.response.close();
+          return;
+        }
+        req.response.write(jsonEncode({'status': true}));
+        await req.response.close();
+      });
+
+      final session = LiveboxSession('http://127.0.0.1:${server.port}/');
+      addTearDown(session.close);
+
+      expect(await session.signIn('admin', 'secret'), equals(1));
+      expect(authCount, equals(1));
+
+      // Call 1: acquires channel 42
+      await session.eventRequest(const ['Devices.Device']);
+      expect(session.channelId, equals(42));
+
+      // Call 2: missing channelid resets channelId to 0
+      await session.eventRequest(const ['Devices.Device']);
+      expect(session.channelId, equals(0));
+
+      // Call 3: HTTP 401 triggers re-auth
+      final r3 = await session.eventRequest(const ['Devices.Device']);
+      expect(r3, isNull);
+      expect(authCount, equals(2));
+
+      // Call 4: singular error triggers re-auth
+      final r4 = await session.eventRequest(const ['Devices.Device']);
+      expect(r4, isNull);
+      expect(authCount, equals(3));
+
+      // Call 5: fresh session + fresh channel receives events cleanly
+      final r5 = await session.eventRequest(const ['Devices.Device']);
+      expect(r5, isNotNull);
+      expect((r5!['events'] as List).length, equals(1));
+      expect(session.channelId, equals(99));
+    });
+
+    test('LiveboxMonitorService watchdog renews silent event channel without dropping connection',
+        () async {
+      int eventSubCountWithoutChannel = 0;
+      int getTimeCalls = 0;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+
+      server.listen((req) async {
+        final body = await utf8.decoder.bind(req).join();
+        final decoded = jsonDecode(body) as Map<String, dynamic>;
+
+        if (decoded['method'] == 'createContext') {
+          req.response.write(jsonEncode({
+            'status': 0,
+            'data': {'contextID': 'ctx_watchdog'},
+          }));
+          await req.response.close();
+          return;
+        }
+        if (decoded['method'] == 'getTime') {
+          getTimeCalls++;
+          req.response.write(jsonEncode({'status': true}));
+          await req.response.close();
+          return;
+        }
+        if (decoded.containsKey('events')) {
+          final hasChannel = decoded.containsKey('channelid');
+          if (!hasChannel) {
+            eventSubCountWithoutChannel++;
+            if (eventSubCountWithoutChannel >= 2) {
+              // After watchdog reset channelId -> deliver a fresh event!
+              req.response.write(jsonEncode({
+                'channelid': 20,
+                'events': [
+                  {
+                    'data': {
+                      'handler': 'HomeLan.Interface.eth0.Stats',
+                      'object': {
+                        'reason': 'changed',
+                        'attributes': {'BytesReceived': 98765},
+                      },
+                    },
+                  },
+                ],
+              }));
+              await req.response.close();
+              return;
+            }
+          }
+          // Initial channel stays silent (empty events)
+          req.response.write(jsonEncode({'channelid': 10, 'events': <dynamic>[]}));
+          await req.response.close();
+          return;
+        }
+        if (decoded['service'] == 'sysbus.DeviceInfo') {
+          req.response.write(jsonEncode({
+            'result': {'status': {'ProductClass': 'Livebox S', 'BaseMAC': 'AA:BB:CC:00:00:99'}},
+          }));
+          await req.response.close();
+          return;
+        }
+        req.response.write(jsonEncode({'result': {'status': <dynamic>[], 'data': <String, dynamic>{}}}));
+        await req.response.close();
+      });
+
+      final tmpDir = Directory.systemTemp.createTempSync('lbm_watchdog_test_');
+      addTearDown(() {
+        if (tmpDir.existsSync()) tmpDir.deleteSync(recursive: true);
+      });
+
+      final vault = SecretVault(dataDir: tmpDir.path, explicitKey: 'watchdog-test-key');
+      await vault.initialize();
+      await vault.saveLiveboxCredentials(
+        LiveboxCredentials(
+          url: 'http://127.0.0.1:${server.port}/',
+          username: 'admin',
+          password: 'secret',
+          demoMode: false,
+        ),
+      );
+
+      final service = LiveboxMonitorService(
+        db: MonitorDatabase.openInMemory(),
+        vault: vault,
+        eventWatchdogInterval: const Duration(milliseconds: 500),
+      );
+      addTearDown(service.dispose);
+
+      await service.start();
+
+      // Wait up to 4s for watchdog to verify session, reset channel, and receive the HomeLan event
+      final deadline = DateTime.now().add(const Duration(seconds: 4));
+      while (DateTime.now().isBefore(deadline)) {
+        if (service.listEventsJson().any((e) => e['reason'] == 'HomeLan')) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+
+      expect(service.isConnected, isTrue);
+      expect(getTimeCalls, greaterThanOrEqualTo(2)); // signIn + watchdog checkSession
+      expect(eventSubCountWithoutChannel, greaterThanOrEqualTo(2));
+      expect(
+        service.listEventsJson().any((e) => e['reason'] == 'HomeLan'),
+        isTrue,
+      );
     });
   });
 }

@@ -756,13 +756,15 @@
   }
 
   // ---------------- Events Table ----------------
-  async function loadEvents() {
+  async function loadEvents({ silent = false } = {}) {
     try {
       const res = await api('/api/events?limit=150');
       state.events = res.events || [];
       renderEventsTable();
     } catch (e) {
-      toast(`Erreur événements : ${e.message}`, true);
+      if (!silent) {
+        toast(`Erreur événements : ${e.message}`, true);
+      }
     }
   }
 
@@ -929,10 +931,17 @@
     const badge = $('sse-badge');
     const es = new EventSource(`${BASE_PATH}/api/stream`);
     state.sse = es;
+    let sseHasOpened = false;
 
     es.onopen = () => {
       badge.className = 'pill pill-green';
       badge.innerHTML = '<span class="dot dot-green"></span> Flux temps réel';
+      if (sseHasOpened) {
+        // Reconnected after a drop / proxy timeout: catch up missed events & state
+        loadEvents({ silent: true });
+        refreshLiveViews();
+      }
+      sseHasOpened = true;
     };
 
     es.onerror = () => {
@@ -966,6 +975,9 @@
 
     es.addEventListener('event', (e) => {
       const ev = JSON.parse(e.data);
+      if (ev.id != null && state.events.some((existing) => existing.id === ev.id)) {
+        return;
+      }
       state.events.unshift(ev);
       if (state.events.length > 250) state.events.pop();
       renderEventsTable();
@@ -1032,6 +1044,9 @@
       updateAutoRefreshBadge();
       if (document.getElementById('tab-graphs').classList.contains('active')) {
         loadSelectedDeviceGraphs();
+      }
+      if (document.getElementById('tab-events').classList.contains('active')) {
+        loadEvents({ silent: true });
       }
     } catch (_) {}
   }
